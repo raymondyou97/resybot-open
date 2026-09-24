@@ -10,6 +10,7 @@ import requests
 from client.booking_state import BookingState, CampaignBlocked
 from client.control import RunControl
 from client.fees import FeePolicyError, validate_policy, validate_quote
+from client.http_headers import CLIENT_USER_AGENT
 from client.local_auth import local_headers
 from client.verification import matching_reservation, row_details, slot_datetime, upcoming
 
@@ -22,6 +23,7 @@ def resy_headers(auth_token):
         'X-Resy-Auth-Token': auth_token,
         'Authorization': f'ResyAPI api_key="{PUBLIC_CLIENT_KEY}"',
         'X-Resy-Universal-Auth': auth_token,
+        'User-Agent': CLIENT_USER_AGENT,
         'Accept': 'application/json',
         'Referer': 'https://resy.com/',
     }

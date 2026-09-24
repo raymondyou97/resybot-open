@@ -52,6 +52,13 @@ class AvailabilityTests(OfflineTest):
         self.assertEqual(self.run_task(), 'blocked')
         self.book.assert_called_once()
 
+    def test_availability_identifies_the_client_explicitly(self):
+        self.assertEqual(self.run_task(), 'confirmed')
+        self.assertEqual(
+            self.get.call_args.kwargs['headers']['User-Agent'],
+            'resybot-open/1.0 (personal reservation client)',
+        )
+
     def test_default_is_non_mutating_dry_run(self):
         with redirect_stdout(io.StringIO()):
             result = worker.execute_task(task(), control=self.control)

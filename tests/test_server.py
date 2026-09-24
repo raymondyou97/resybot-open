@@ -67,6 +67,10 @@ class LocalServerTests(OfflineTest):
             response = self.client.post('/api/book-reservation', json=payload, headers=self.headers)
             self.assertEqual(response.status_code, 409)
             upstream.post.assert_called_once()
+            self.assertEqual(
+                upstream.post.call_args.kwargs['headers']['User-Agent'],
+                'resybot-open/1.0 (personal reservation client)',
+            )
 
     def test_booking_cannot_substitute_a_different_quote(self):
         key = self.state.claim(task(), '2099-01-01', '18:30')
@@ -139,6 +143,10 @@ class LocalServerTests(OfflineTest):
             cls.return_value.__aenter__.return_value = upstream
             response = self.client.post('/api/get-details', json=payload, headers=self.headers)
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            upstream.get.call_args.kwargs['headers']['User-Agent'],
+            'resybot-open/1.0 (personal reservation client)',
+        )
         self.assertNotIn('private@example.invalid', response.text)
         self.assertNotIn('private-method', response.text)
         self.assertEqual(response.json()['details']['payment']['amounts']['total'], 0)

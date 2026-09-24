@@ -17,6 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
 
 from client.booking_state import BookingState, CampaignBlocked  # noqa: E402
 from client.local_auth import local_token  # noqa: E402
+from client.http_headers import CLIENT_USER_AGENT  # noqa: E402
 from client.fees import FeePolicyError, validate_quote  # noqa: E402
 
 
@@ -60,6 +61,7 @@ def upstream_headers(headers):
         'Authorization': headers['Authorization'],
         'X-Resy-Auth-Token': headers['X-Resy-Auth-Token'],
         'X-Resy-Universal-Auth': headers['X-Resy-Auth-Token'],
+        'User-Agent': CLIENT_USER_AGENT,
         'Accept': 'application/json',
         'Referer': 'https://widgets.resy.com/',
     }
