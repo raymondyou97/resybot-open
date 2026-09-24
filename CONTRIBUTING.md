@@ -30,9 +30,12 @@ Edit `requirements.in` or `requirements-dev.in` and regenerate hash locks on Pyt
 3.10 using pip-tools:
 
 ```sh
-pip-compile --generate-hashes --no-emit-index-url --no-emit-trusted-host -o requirements.lock requirements.in
-pip-compile --generate-hashes --no-emit-index-url --no-emit-trusted-host -o requirements-dev.lock requirements-dev.in
+pip-compile --allow-unsafe --generate-hashes --no-emit-index-url --no-emit-trusted-host -o requirements.lock requirements.in
+pip-compile --allow-unsafe --generate-hashes --no-emit-index-url --no-emit-trusted-host -o requirements-dev.lock requirements-dev.in
 ```
+
+`--allow-unsafe` includes pip/setuptools in the audited hash lock; it does not disable
+hash verification. Fresh Python 3.12+ environments do not preinstall setuptools.
 
 For workflow changes, validate YAML locally with Go installed:
 
