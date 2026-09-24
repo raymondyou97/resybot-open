@@ -19,6 +19,11 @@ def amount(value):
     return result
 
 
+def fee_limit(value):
+    """Only an explicit 'any' approval removes a ceiling; missing values never do."""
+    return None if value == 'any' else amount(value)
+
+
 def validate_policy(task):
     if task.get('accept_terms') is not True:
         raise FeePolicyError('Live tasks require explicit policy acceptance in task configuration.')
@@ -26,7 +31,7 @@ def validate_policy(task):
     if isinstance(party, bool) or not isinstance(party, int) or not 1 <= party <= 20:
         raise FeePolicyError('A valid party size is required for charge limits.')
     for key in ('max_total_charge', 'max_cancellation_fee'):
-        amount(task.get(key))
+        fee_limit(task.get(key))
     currency = task.get('currency')
     if not isinstance(currency, str) or len(currency) != 3 or not currency.isupper():
         raise FeePolicyError('Live tasks require an explicit three-letter currency.')
@@ -77,7 +82,9 @@ def validate_quote(task, details):
     if currency != task['currency']:
         if not (currency is None and explicitly_free and cancellation == 0):
             raise FeePolicyError('Quote currency is missing or differs from the task; not submitting.')
-    if total > amount(task['max_total_charge']):
+    total_limit = fee_limit(task['max_total_charge'])
+    cancellation_limit = fee_limit(task['max_cancellation_fee'])
+    if total_limit is not None and total > total_limit:
         raise FeePolicyError('Total charge exceeds the approved ceiling; not submitting.')
-    if cancellation > amount(task['max_cancellation_fee']):
+    if cancellation_limit is not None and cancellation > cancellation_limit:
         raise FeePolicyError('Cancellation fee exceeds the approved ceiling; not submitting.')

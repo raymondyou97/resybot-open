@@ -110,6 +110,24 @@ class FeeTests(OfflineTest):
     def test_valid_quote(self):
         validate_quote(task(), quote()['details'])
 
+    def test_explicit_any_approval_removes_only_the_selected_ceiling(self):
+        validate_quote(
+            task(max_total_charge='any', max_cancellation_fee='any'),
+            quote(total=500, cancellation=500)['details'],
+        )
+        with self.assertRaises(FeePolicyError):
+            validate_quote(task(max_total_charge='any'), quote(total=500, cancellation=500)['details'])
+        with self.assertRaises(FeePolicyError):
+            validate_quote(task(max_cancellation_fee='any'), quote(total=500, cancellation=500)['details'])
+
+    def test_any_fee_approval_does_not_allow_invalid_quotes_or_implicit_approval(self):
+        for details in ({}, quote(total=None)['details'], quote(currency='JPY')['details']):
+            with self.assertRaises(FeePolicyError):
+                validate_quote(task(max_total_charge='any', max_cancellation_fee='any'), details)
+        for value in (None, '', 'unlimited', 'Infinity', True):
+            with self.assertRaises(FeePolicyError):
+                validate_quote(task(max_total_charge=value), quote()['details'])
+
     def test_missing_unknown_excessive_or_unaccepted_terms_stop(self):
         cases = [
             (task(), {}),

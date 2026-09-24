@@ -166,6 +166,11 @@ Live tasks require:
 | `max_total_charge` | Maximum reported total charge for the reservation |
 | `max_cancellation_fee` | Maximum cancellation exposure for the party |
 
+Either ceiling can be the explicit string `any` when the operator authorizes that
+category of fees without a monetary cap. This approval is stored only in ignored
+local settings; it does not bypass quote validation, currency checks, access challenges,
+or duplicate/confirmation guards. A missing, blank, or nonfinite ceiling is not approval.
+
 The quote adapter requires an explicit `payment.amounts.total` and cancellation
 fee field. Monetary quotes also require currency and `cancellation.fee.amount`.
 The observed free-quote form has `payment.config.type: "free"`, an explicit zero

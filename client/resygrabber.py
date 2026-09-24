@@ -12,7 +12,7 @@ import inquirer
 
 from client.booking_state import BookingState
 from client.config_store import data_path, load_data, save_data
-from client.fees import FeePolicyError, amount, validate_policy
+from client.fees import FeePolicyError, amount, fee_limit, validate_policy
 from client.reservations import cancel_verified, list_account, resolve_claim
 from client import reservation_plan
 from client.time_window import display_window, time_window
@@ -48,8 +48,13 @@ def task_summary(task):
 
 def policy(task):
     task['currency'] = input('Venue currency (e.g. USD): ').strip().upper()
-    task['max_total_charge'] = str(amount(input('Maximum TOTAL charge due for this reservation: ')))
-    task['max_cancellation_fee'] = str(amount(input('Maximum cancellation/no-show fee amount: ')))
+    for key, label in (
+        ('max_total_charge', 'TOTAL reservation charge'),
+        ('max_cancellation_fee', 'cancellation/no-show exposure'),
+    ):
+        value = input(f'Maximum {label} (or any to explicitly approve without a ceiling): ').strip().lower()
+        limit = fee_limit(value)
+        task[key] = 'any' if limit is None else str(limit)
     task['accept_terms'] = confirm('Have you reviewed and accepted the venue booking/cancellation terms?')
     validate_policy(task)
 
