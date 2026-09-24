@@ -1,0 +1,1 @@
+"""Authenticated local reservation bridge."""

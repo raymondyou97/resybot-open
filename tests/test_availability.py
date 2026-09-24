@@ -1,178 +1,174 @@
-"""Slot lookup tests with no network, account files, or real booking calls."""
+import io
+from contextlib import redirect_stdout
+from unittest.mock import Mock, patch
 
-from datetime import date, timedelta
-import random
-import types
-import unittest
-from unittest.mock import Mock
-
-from test_optional_proxies import load_functions
+from client.control import RunControl
+from client import task_executor as worker
+from support import OfflineTest, availability, quote, reservation, task
 
 
-class EndCycle(BaseException):
-    pass
-
-
-def response(payload, status=200):
-    return types.SimpleNamespace(status_code=status, json=lambda: payload)
-
-
-class AvailabilityTests(unittest.TestCase):
-    def worker(self, responses):
-        return load_functions(
-            'client/task_executor.py',
-            {'execute_task', 'format_proxy', 'reservation_dates'},
-            date=date, timedelta=timedelta, random=random,
-            requests=types.SimpleNamespace(get=Mock(side_effect=responses)),
-            time=types.SimpleNamespace(sleep=Mock(side_effect=EndCycle)),
-            get_details=Mock(return_value='offline-book-token'),
-            book_reservation=Mock(return_value={'reservation_id': 'offline-fixture'}),
-            send_discord_notification=Mock(), print=Mock(),
+class AvailabilityTests(OfflineTest):
+    def setUp(self):
+        super().setUp()
+        self.control = RunControl(120)
+        self.control.wait = Mock(return_value=False)
+        self.get = self.enter(
+            patch.object(
+                worker.requests,
+                'get',
+                return_value=Mock(status_code=200, json=Mock(return_value=availability())),
+            )
         )
-
-    def task(self, **overrides):
-        return {
-            'auth_token': 'offline-fixture', 'payment_id': 0,
-            'restaurant_id': '123', 'party_sz': 2,
-            'start_date': '2030-01-01', 'end_date': '2030-01-01',
-            'start_time': 18, 'end_time': 19, 'delay': 2000,
-            **overrides,
-        }
-
-    def run_worker(self, worker, **overrides):
-        worker.execute_task(self.task(**overrides), '', '', [], '')
-
-    def test_uses_slot_endpoint_without_calendar_gate(self):
-        worker = self.worker([response({'results': {'venues': []}})])
-        with self.assertRaises(EndCycle):
-            self.run_worker(worker)
-        worker.requests.get.assert_called_once()
-        call = worker.requests.get.call_args
-        self.assertEqual(call.args, ('https://api.resy.com/4/find',))
-        self.assertEqual(call.kwargs['params'], {
-            'lat': 0, 'long': 0, 'day': '2030-01-01', 'party_size': 2, 'venue_id': '123',
-        })
-        self.assertEqual(call.kwargs['timeout'], (5, 15))
-        worker.get_details.assert_not_called()
-        worker.book_reservation.assert_not_called()
-        worker.time.sleep.assert_called_once_with(2.0)
-        worker.print.assert_called_once_with(
-            '[Restaurant 123] No matching slot for 2030-01-01; waiting 2 seconds before the next check.'
+        self.details = self.enter(patch.object(worker, 'get_details', return_value=quote()))
+        self.book = self.enter(patch.object(worker, 'book_reservation', return_value={'submitted': True}))
+        self.account = self.enter(
+            patch.object(
+                worker,
+                'upcoming',
+                side_effect=[
+                    {'reservations': []},
+                    {'reservations': [reservation()]},
+                ],
+            )
         )
+        self.enter(patch.object(worker, 'send_discord_notification'))
 
-    def test_no_slot_log_uses_restaurant_name_and_id(self):
-        worker = self.worker([response({'results': {'venues': [
-            {'venue': {'name': 'Dear Margo'}, 'slots': []},
-        ]}})])
-        with self.assertRaises(EndCycle):
-            self.run_worker(worker)
-        worker.print.assert_called_once_with(
-            '[Dear Margo (ID 123)] No matching slot for 2030-01-01; waiting 2 seconds before the next check.'
-        )
+    def enter(self, context):
+        value = context.start()
+        self.addCleanup(context.stop)
+        return value
 
-    def test_name_is_retained_when_next_date_has_no_venue(self):
-        worker = self.worker([
-            response({'results': {'venues': [
-                {'venue': {'name': 'Dear Margo'}, 'slots': []},
-            ]}}),
-            response({'results': {'venues': []}}),
-        ])
-        worker.time.sleep.side_effect = [None, EndCycle()]
-        with self.assertRaises(EndCycle):
-            self.run_worker(worker, end_date='2030-01-02')
-        worker.print.assert_any_call(
-            '[Dear Margo (ID 123)] No matching slot for 2030-01-02; waiting 2 seconds before the next check.'
-        )
+    def run_task(self, data=None, dry_run=False):
+        with redirect_stdout(io.StringIO()):
+            return worker.execute_task(
+                data or task(), control=self.control, dry_run=dry_run, state=self.state
+            )
 
-    def test_checks_each_requested_day_with_delay_between_requests(self):
-        empty = response({'results': {'venues': [{'slots': []}]}})
-        worker = self.worker([empty, empty])
-        worker.time.sleep.side_effect = [None, EndCycle()]
-        with self.assertRaises(EndCycle):
-            self.run_worker(worker, end_date='2030-01-02')
-        self.assertEqual(
-            [call.kwargs['params']['day'] for call in worker.requests.get.call_args_list],
-            ['2030-01-01', '2030-01-02'],
-        )
-        self.assertEqual(worker.time.sleep.call_count, 2)
-        worker.book_reservation.assert_not_called()
+    def test_verified_success_stops_and_persists(self):
+        self.assertEqual(self.run_task(), 'confirmed')
+        self.book.assert_called_once()
+        self.get.assert_called_once()
+        self.assertEqual(self.state.rows()[0]['status'], 'confirmed')
+        self.assertEqual(self.run_task(), 'blocked')
+        self.book.assert_called_once()
 
-    def test_repeats_date_range_only_after_waiting(self):
-        empty = response({'results': {'venues': []}})
-        worker = self.worker([empty, empty])
-        worker.time.sleep.side_effect = [None, EndCycle()]
-        with self.assertRaises(EndCycle):
-            self.run_worker(worker)
-        self.assertEqual(worker.requests.get.call_count, 2)
-        self.assertEqual(worker.time.sleep.call_count, 2)
+    def test_default_is_non_mutating_dry_run(self):
+        with redirect_stdout(io.StringIO()):
+            result = worker.execute_task(task(), control=self.control)
+        self.assertEqual(result, 'dry-run-complete')
+        self.details.assert_not_called()
+        self.book.assert_not_called()
+        self.account.assert_not_called()
+        self.assertEqual(self.state.rows(), [])
 
-    def test_zero_delay_still_waits_one_second(self):
-        worker = self.worker([response({'results': {'venues': []}})])
-        with self.assertRaises(EndCycle):
-            self.run_worker(worker, delay=0)
-        worker.time.sleep.assert_called_once_with(1.0)
+    def test_dry_run_ignores_unconfigured_fee_policy(self):
+        self.assertEqual(self.run_task(task(accept_terms=False), dry_run=True), 'dry-run-complete')
+        self.book.assert_not_called()
 
-    def test_http_errors_stop_without_retry_or_booking(self):
+    def test_invalid_policy_blocks_before_network(self):
+        self.assertEqual(self.run_task(task(accept_terms=False)), 'failed')
+        self.get.assert_not_called()
+
+    def test_price_failure_releases_only_unsubmitted_claim(self):
+        self.details.return_value = quote(total=500)
+        self.assertEqual(self.run_task(), 'failed')
+        self.book.assert_not_called()
+        self.assertEqual(self.state.rows()[0]['status'], 'released')
+
+    def test_missing_quote_fields_stop_without_submission(self):
+        self.details.return_value = {'response_value': 'fixture', 'details': {}}
+        self.assertEqual(self.run_task(), 'failed')
+        self.book.assert_not_called()
+
+    def test_booking_id_without_account_confirmation_keeps_hold(self):
+        self.account.side_effect = [{'reservations': []}, {'reservations': []}]
+        self.assertEqual(self.run_task(), 'awaiting-verification')
+        self.assertEqual(self.state.rows()[0]['status'], 'submitted')
+        self.assertEqual(self.run_task(), 'blocked')
+        self.book.assert_called_once()
+
+    def test_timeout_after_submission_keeps_hold(self):
+        self.book.side_effect = TimeoutError('sensitive error must not be printed')
+        self.assertEqual(self.run_task(), 'awaiting-verification')
+        self.assertEqual(self.state.rows()[0]['status'], 'submitted')
+
+    def test_wrong_party_does_not_confirm(self):
+        self.account.side_effect = [{'reservations': []}, {'reservations': [reservation(num_seats=3)]}]
+        self.assertEqual(self.run_task(), 'awaiting-verification')
+
+    def test_existing_upcoming_reservation_prevents_duplicate(self):
+        self.account.side_effect = [{'reservations': [reservation()]}]
+        self.assertEqual(self.run_task(), 'blocked')
+        self.book.assert_not_called()
+
+    def test_stop_before_worker_does_not_query(self):
+        self.control.stop()
+        self.assertEqual(self.run_task(), 'stopped')
+        self.get.assert_not_called()
+
+    def test_stop_during_availability_does_not_enter_checkout(self):
+        def get(*args, **kwargs):
+            self.control.stop()
+            return Mock(status_code=200, json=lambda: availability())
+
+        self.get.side_effect = get
+        self.assertEqual(self.run_task(), 'stopped')
+        self.details.assert_not_called()
+
+    def test_stop_during_quote_does_not_submit(self):
+        def details(*args, **kwargs):
+            self.control.stop()
+            return quote()
+
+        self.details.side_effect = details
+        self.assertEqual(self.run_task(), 'stopped')
+        self.book.assert_not_called()
+        self.assertEqual(self.state.rows()[0]['status'], 'released')
+
+    def test_expiry_prevents_queries(self):
+        self.control.deadline = 0
+        self.assertEqual(self.run_task(), 'stopped')
+        self.get.assert_not_called()
+
+    def test_http_errors_stop_without_retry(self):
         for status in [401, 403, 429, 500]:
             with self.subTest(status=status):
-                worker = self.worker([response({}, status=status)])
-                self.run_worker(worker)
-                worker.requests.get.assert_called_once()
-                worker.time.sleep.assert_not_called()
-                worker.get_details.assert_not_called()
-                worker.book_reservation.assert_not_called()
-                summary = worker.send_discord_notification.call_args.kwargs['summary']
-                self.assertIn(str(status), summary)
+                self.get.reset_mock()
+                self.get.return_value.status_code = status
+                self.assertEqual(self.run_task(), 'failed')
+                self.get.assert_called_once()
+                self.book.assert_not_called()
 
-    def test_malformed_response_stops_without_booking(self):
-        for payload in [{}, [], {'results': {}}, {'results': {'venues': None}}]:
-            with self.subTest(payload=payload):
-                worker = self.worker([response(payload)])
-                self.run_worker(worker)
-                worker.requests.get.assert_called_once()
-                worker.book_reservation.assert_not_called()
-                worker.time.sleep.assert_not_called()
-                worker.send_discord_notification.assert_called_once()
+    def test_wrong_venue_and_slot_date_never_book(self):
+        self.get.return_value.json.return_value = availability(venue_id=999)
+        self.control.wait.return_value = True
+        self.assertEqual(self.run_task(), 'stopped')
+        self.book.assert_not_called()
+        self.get.return_value.json.return_value = availability(
+            slots=[
+                {'date': {'start': '2099-01-02 18:30:00'}, 'config': {'token': 'fixture'}},
+            ]
+        )
+        self.assertEqual(self.run_task(), 'failed')
+        self.book.assert_not_called()
 
-    def test_matching_slot_passes_correct_day_to_mocked_checkout_once(self):
-        token = '/'.join(['offline'] * 8 + ['18:30'])
-        worker = self.worker([response({'results': {'venues': [
-            {'venue': {'name': 'Dear Margo'}, 'slots': [
-                {'config': {'token': token}}, {'config': {'token': token}},
-            ]},
-        ]}})])
-        self.run_worker(worker)
-        worker.get_details.assert_called_once()
-        self.assertEqual(worker.get_details.call_args.args[:4], ('2030-01-01', 2, token, '123'))
-        worker.book_reservation.assert_called_once()
-        self.assertEqual(worker.book_reservation.call_args.args[3], '2030-01-01')
-        worker.requests.get.assert_called_once()
-        worker.time.sleep.assert_not_called()
-        summary = worker.send_discord_notification.call_args.kwargs['summary']
-        self.assertIn('[Dear Margo (ID 123)]', summary)
-        self.assertIn('stopping this worker', summary)
+    def test_past_dates_are_not_queried(self):
+        self.assertEqual(self.run_task(task(start_date='2000-01-01', end_date='2000-01-02')), 'stopped')
+        self.get.assert_not_called()
 
-    def test_outside_time_window_does_not_enter_checkout(self):
-        token = '/'.join(['offline'] * 8 + ['12:00'])
-        worker = self.worker([response({'results': {'venues': [
-            {'slots': [{'config': {'token': token}}]},
-        ]}})])
-        with self.assertRaises(EndCycle):
-            self.run_worker(worker)
-        worker.get_details.assert_not_called()
-        worker.book_reservation.assert_not_called()
+    def test_logs_identify_restaurant_without_credentials(self):
+        self.get.return_value.json.return_value = availability(slots=[])
+        output = io.StringIO()
+        with redirect_stdout(output):
+            worker.execute_task(task(), control=self.control, dry_run=True)
+        self.assertIn('Dear Margo (ID 123)', output.getvalue())
+        self.assertNotIn(task()['auth_token'], output.getvalue())
+        self.assertNotIn('fixture-slot-token', output.getvalue())
 
-    def test_date_range_validation(self):
-        worker = self.worker([])
-        self.assertEqual(worker.reservation_dates('2028-02-28', '2028-03-01'),
-                         ['2028-02-28', '2028-02-29', '2028-03-01'])
-        for start, end in [('2030-01-02', '2030-01-01'),
-                           ('2030-01-01', '2030-02-01'),
-                           ('not-a-date', '2030-01-01')]:
-            with self.subTest(start=start, end=end), self.assertRaises(ValueError):
-                self.run_worker(worker, start_date=start, end_date=end)
-        worker.requests.get.assert_not_called()
-
-
-if __name__ == '__main__':
-    unittest.main()
+    def test_dates_and_polling_remain_bounded(self):
+        self.assertEqual(
+            worker.reservation_dates('2028-02-28', '2028-03-01'), ['2028-02-28', '2028-02-29', '2028-03-01']
+        )
+        for start, end in [('2030-01-02', '2030-01-01'), ('2030-01-01', '2030-02-01')]:
+            with self.assertRaises(ValueError):
+                worker.reservation_dates(start, end)

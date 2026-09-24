@@ -1,11 +1,10 @@
-import click
-import os
+"""Compatibility launcher for `python client/entry.py`."""
 
-@click.command()
-def start():
-    # Directly import and run the main application
-    import resygrabber
-    resygrabber.menu()
+from pathlib import Path
+import sys
 
-if __name__ == "__main__":
-    start()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from client.resygrabber import main  # noqa: E402
+
+if __name__ == '__main__':
+    main()

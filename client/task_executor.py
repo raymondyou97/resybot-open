@@ -1,173 +1,334 @@
-import random
-import time
-import requests
+"""Bounded automatic reservation workers with durable submission holds."""
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
-import capsolver
-from urllib.parse import quote
+from datetime import date, datetime, timedelta
+from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
+
+import requests
+
+from client.booking_state import BookingState, CampaignBlocked
+from client.control import RunControl
+from client.fees import FeePolicyError, validate_policy, validate_quote
+from client.local_auth import local_headers
+from client.verification import matching_reservation, row_details, slot_datetime, upcoming
+
+
+PUBLIC_CLIENT_KEY = 'VbWk7s3L4KiK5fzlO7JD3Q5EYolJI7n5'
+
+
+def resy_headers(auth_token):
+    return {
+        'X-Resy-Auth-Token': auth_token,
+        'Authorization': f'ResyAPI api_key="{PUBLIC_CLIENT_KEY}"',
+        'X-Resy-Universal-Auth': auth_token,
+        'Accept': 'application/json',
+        'Referer': 'https://resy.com/',
+    }
 
 
 def format_proxy(proxy_str):
     ip, port, user, password = proxy_str.split(':')
-    return {
-        'http': f'http://{user}:{password}@{ip}:{port}',
-        'https': f'http://{user}:{password}@{ip}:{port}',
-    }
+    return {scheme: f'http://{user}:{password}@{ip}:{port}' for scheme in ('http', 'https')}
+
 
 def reservation_dates(start_date, end_date):
-    start = date.fromisoformat(start_date)
-    end = date.fromisoformat(end_date)
+    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
     if start.isoformat() != start_date or end.isoformat() != end_date:
         raise ValueError('Reservation dates must use YYYY-MM-DD.')
-    day_count = (end - start).days + 1
-    if not 1 <= day_count <= 31:
-        raise ValueError('Reservation date range must contain between 1 and 31 days.')
-    return [(start + timedelta(days=offset)).isoformat() for offset in range(day_count)]
+    count = (end - start).days + 1
+    if not 1 <= count <= 31:
+        raise ValueError('Reservation date range must contain 1–31 days.')
+    return [(start + timedelta(days=offset)).isoformat() for offset in range(count)]
 
 
-def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
-    auth_token = task['auth_token']
-    payment_id = task['payment_id']
-    restaurant_id = task['restaurant_id']
-    restaurant_label = f'Restaurant {restaurant_id}'
-    party_sz = task['party_sz']
-    start_date = task['start_date']
-    end_date = task['end_date']
-    start_time = task['start_time']
-    end_time = task['end_time']
-    delay = task['delay']
-    days = reservation_dates(start_date, end_date)
-    pause_seconds = max(delay / 1000, 1.0)
-    #captcha_service = task['captcha_service']
+def safe_label(name):
+    return ''.join(char for char in str(name) if char.isprintable())[:160]
 
-    headers = {
-            'X-Resy-Auth-Token': auth_token,
-            'Authorization': 'ResyAPI api_key="VbWk7s3L4KiK5fzlO7JD3Q5EYolJI7n5"',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'X-Resy-Universal-Auth': auth_token,
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Host': 'api.resy.com',
-            'Accept': 'application/json, text/plain, */*',
-            'Referer': 'https://resy.com/',
-    }
 
-    #captcha_key = capsolver_key if captcha_service == 'CAPSolver' else capmonster_key
-    #capsolver.api_key = captcha_key
+def execute_task(
+    task,
+    capsolver_key='',
+    capmonster_key='',
+    proxies=None,
+    webhook_url='',
+    *,
+    control=None,
+    dry_run=True,
+    state=None,
+):
+    control = control or RunControl()
+    label = 'Restaurant unknown'
+    claim = None
+    submitted = False
+    state = state if state is not None else (None if dry_run else BookingState())
 
-    while True:
-        try:
-            for day in days:
-                select_proxy = format_proxy(random.choice(proxies)) if proxies else {}
+    def report(text):
+        send_discord_notification(webhook_url, summary=f'[{label}] {text}')
+
+    try:
+        venue_id = str(task['restaurant_id'])
+        party = task['party_sz']
+        if (
+            not venue_id.isdigit()
+            or isinstance(party, bool)
+            or not isinstance(party, int)
+            or not 1 <= party <= 20
+        ):
+            raise ValueError('Invalid restaurant ID or party size.')
+        label = f'Restaurant {venue_id}'
+        start_hour, end_hour = int(task['start_time']), int(task['end_time'])
+        if not 0 <= start_hour <= end_hour <= 23:
+            raise ValueError('Invalid time window.')
+        pause_seconds = max(float(task['delay']) / 1000, 1.0)
+        if not 0 < pause_seconds <= 86400:
+            raise ValueError('Invalid polling delay.')
+        days = reservation_dates(task['start_date'], task['end_date'])
+        if not dry_run:
+            validate_policy(task)
+        headers = resy_headers(task['auth_token'])
+        proxy = format_proxy(proxies[0]) if proxies else {}
+        while not control.stopped():
+            today = datetime.now(ZoneInfo(task.get('timezone', 'America/New_York'))).date()
+            future_days = [day for day in days if date.fromisoformat(day) >= today]
+            if not future_days:
+                report('All requested dates are in the past; stopped.')
+                return 'stopped'
+            for day in future_days:
+                if control.stopped():
+                    return 'stopped'
+                if state and state.blocked(task):
+                    report('Campaign already succeeded or has an unresolved attempt; stopped.')
+                    return 'blocked'
                 response = requests.get(
                     'https://api.resy.com/4/find',
-                    params={'lat': 0, 'long': 0, 'day': day, 'party_size': party_sz, 'venue_id': restaurant_id},
+                    params={'lat': 0, 'long': 0, 'day': day, 'party_size': party, 'venue_id': venue_id},
                     headers=headers,
-                    proxies=select_proxy,
-                    timeout=(5, 15),
+                    proxies=proxy,
+                    timeout=control.timeout(),
+                    allow_redirects=False,
                 )
+                if control.stopped():
+                    return 'stopped'
                 if response.status_code != 200:
-                    send_discord_notification(webhook_url, f'Failed to get availability for restaurant {restaurant_id} - {response.status_code}', summary=f'[{restaurant_label}] Availability check failed (HTTP {response.status_code}); no booking was submitted by this task.')
-                    return
-
+                    report(f'Availability failed (HTTP {response.status_code}); stopped without retry.')
+                    return 'failed'
                 data = response.json()
-                results = data.get('results') if isinstance(data, dict) else None
-                venues = results.get('venues') if isinstance(results, dict) else None
+                venues = data.get('results', {}).get('venues') if isinstance(data, dict) else None
                 if not isinstance(venues, list):
-                    send_discord_notification(webhook_url, f'Unexpected availability response for restaurant {restaurant_id}', summary=f'[{restaurant_label}] Slot response was unexpected; no booking was submitted by this task.')
-                    return
-
-                for venue in venues[:1]:
+                    raise ValueError('Unexpected slot response.')
+                for venue in venues:
                     metadata = venue.get('venue', {})
-                    name = metadata.get('name') if isinstance(metadata, dict) else None
-                    if isinstance(name, str) and name.strip():
-                        safe_name = ''.join(char for char in name if char.isprintable()).strip()
-                        if safe_name:
-                            restaurant_label = f'{safe_name} (ID {restaurant_id})'
-                    for slot in venue['slots']:
+                    actual_id = metadata.get('id')
+                    if isinstance(actual_id, dict):
+                        actual_id = actual_id.get('resy')
+                    if str(actual_id) != venue_id:
+                        continue
+                    if metadata.get('name'):
+                        label = f'{safe_label(metadata["name"])} (ID {venue_id})'
+                    for slot in venue.get('slots', []):
+                        clock = slot_datetime(slot, day)
+                        if not start_hour <= int(clock[:2]) <= end_hour:
+                            continue
+                        if dry_run:
+                            print(f'[{label}] DRY RUN: matching slot {day} {clock}; checkout not entered.')
+                            continue
+                        if control.stopped():
+                            return 'stopped'
+                        before = upcoming(headers, proxy, timeout=control.timeout())
+                        if any(row_details(row)[0] == venue_id for row in before['reservations']):
+                            report('This account already has an upcoming reservation at this venue; stopped.')
+                            return 'blocked'
+                        if control.stopped():
+                            return 'stopped'
+                        claim = state.claim(task, day, clock)
                         config_token = slot['config']['token']
-                        parts = config_token.split('/')
-                        time_part = parts[8].split(':')[0]
-                        if int(time_part) >= int(start_time) and int(time_part) <= int(end_time):
-                            book_token = get_details(day, party_sz, config_token, restaurant_id, headers, select_proxy)
-                            reservationVal = book_reservation(book_token, auth_token, payment_id, day, party_sz, restaurant_id, config_token, headers, select_proxy)
+                        quote = get_details(
+                            day,
+                            party,
+                            config_token,
+                            venue_id,
+                            headers,
+                            proxy,
+                            control=control,
+                            claim_id=claim,
+                        )
+                        validate_quote(task, quote['details'])
+                        if control.stopped():
+                            return 'stopped'
+                        state.submitted(claim)
+                        submitted = True
+                        book_reservation(
+                            quote['response_value'],
+                            task['auth_token'],
+                            task['payment_id'],
+                            day,
+                            party,
+                            venue_id,
+                            config_token,
+                            headers,
+                            proxy,
+                            control=control,
+                            claim_id=claim,
+                        )
+                        # Verification must still run after a submitted request reaches its deadline.
+                        account = upcoming(headers, proxy)
+                        reference = matching_reservation(account, venue_id, day, clock, party)
+                        if reference:
+                            state.confirmed(claim, reference)
+                            report(f'Confirmed in account: {day} {clock}, party {party}. Campaign stopped.')
+                            return 'confirmed'
+                        report('Submission was not verified in the account. Hold retained; do not retry.')
+                        return 'awaiting-verification'
+                print(f'[{label}] No further matching slots for {day}; waiting {pause_seconds:g} seconds.')
+                if control.wait(pause_seconds):
+                    return 'stopped'
+            if dry_run:
+                return 'dry-run-complete'
+    except CampaignBlocked:
+        report('Campaign already claimed or completed; stopped.')
+        return 'blocked'
+    except Exception as error:
+        if submitted:
+            report('Submission outcome is uncertain. Hold retained; inspect account before retrying.')
+            return 'awaiting-verification'
+        # Error types are safe; network exception strings may contain credentials or response data.
+        if isinstance(error, FeePolicyError):
+            report(str(error))
+        else:
+            report(f'Task stopped before submission ({type(error).__name__}); inspect configuration locally.')
+        return 'failed'
+    finally:
+        if claim and not submitted:
+            state.release_unsubmitted(claim)
+    return 'stopped'
 
-                            if 'reservation_id' in reservationVal or ('specs' in reservationVal and 'reservation_id' in reservationVal['specs']):
-                                send_discord_notification(webhook_url, f'Reservation booked for restaurant {restaurant_id} - {reservationVal}', summary=f'[{restaurant_label}] Booking API returned a reservation ID; stopping this worker. Verify the reservation in your Resy account before retrying.')
-                            else:
-                                send_discord_notification(webhook_url, f'Failed to book reservation for restaurant {restaurant_id} - {reservationVal}', summary=f'[{restaurant_label}] Booking was not confirmed. Check your Resy account before retrying; submission may have occurred.')
-                            return
 
-                print(f'[{restaurant_label}] No matching slot for {day}; waiting {pause_seconds:g} seconds before the next check.')
-                time.sleep(pause_seconds)
-        except Exception:
-            import traceback
-            print(f'[{restaurant_label}] Failed to execute task.')
-            traceback.print_exc()
-            break
-
-
-def get_captcha_token(captcha_key, site_key, url, proxy):
-    solution = capsolver.solve({
-        "type": "RecaptchaV2Task",
-        "websiteKey": site_key,
-        "websiteURL": url,
-        "proxy": proxy['http']
-    })
-    gRecaptchaResponse = solution['gRecaptchaResponse']
-    return gRecaptchaResponse
-    
-def get_details(day, party_size, config_token, restaurant_id, headers, select_proxy):
-    url = 'http://127.0.0.1:8000/api/get-details'
-    payload = {
-        'day': day,
-        'party_size': party_size,
-        'config_token': config_token,
-        'restaurant_id': restaurant_id,
-        'headers': headers,
-        'select_proxy': select_proxy
-    }
-
-    response = requests.post(url, json=payload)
-    
+def get_details(
+    day, party_size, config_token, restaurant_id, headers, select_proxy, *, control=None, claim_id=None
+):
+    response = requests.post(
+        'http://127.0.0.1:8000/api/get-details',
+        headers=local_headers(),
+        json={
+            'day': day,
+            'party_size': party_size,
+            'config_token': config_token,
+            'claim_id': claim_id,
+            'restaurant_id': restaurant_id,
+            'headers': headers,
+            'select_proxy': select_proxy,
+        },
+        timeout=control.timeout() if control else (3, 5),
+        allow_redirects=False,
+    )
     if response.status_code != 200:
-        print(f'Failed to get details for restaurant {restaurant_id} - {response.text} - {response.status_code}')
-        return
-
+        raise ValueError('Reservation details were unavailable.')
     data = response.json()
-    return data['response_value']
+    if (
+        not isinstance(data, dict)
+        or not data.get('response_value')
+        or not isinstance(data.get('details'), dict)
+    ):
+        raise ValueError('Incomplete reservation details.')
+    return data
 
-def book_reservation(book_token, auth_token, payment_id, day, party_size, restaurant_id, config_token, headers, select_proxy):
-    url = 'http://127.0.0.1:8000/api/book-reservation'
-    payload = {
-        'book_token': book_token,
-        'auth_token': auth_token,
-        'payment_id': payment_id,
-        'day': day,
-        'party_size': party_size,
-        'restaurant_id': restaurant_id,
-        'config_token': config_token,
-        'headers': headers,
-        'select_proxy': select_proxy
-    }
 
-    response = requests.post(url, json=payload)
-
+def book_reservation(
+    book_token,
+    auth_token,
+    payment_id,
+    day,
+    party_size,
+    restaurant_id,
+    config_token,
+    headers,
+    select_proxy,
+    *,
+    control=None,
+    claim_id=None,
+):
+    if control and control.stopped():
+        raise ValueError('Task stopped before booking dispatch; verification hold retained.')
+    response = requests.post(
+        'http://127.0.0.1:8000/api/book-reservation',
+        headers=local_headers(),
+        json={
+            'book_token': book_token,
+            'payment_id': payment_id,
+            'day': day,
+            'party_size': party_size,
+            'restaurant_id': restaurant_id,
+            'headers': headers,
+            'select_proxy': select_proxy,
+            'claim_id': claim_id,
+        },
+        timeout=control.timeout() if control else (3, 5),
+        allow_redirects=False,
+    )
+    if response.status_code not in (200, 201):
+        raise ValueError('Booking response is uncertain; verify account before retrying.')
     return response.json()
-        
-def send_discord_notification(webhook_url, message, *, summary='Task ended; check reservation status in Resy before retrying.'):
+
+
+def send_discord_notification(webhook_url, message=None, *, summary='Task ended; verify status in Resy.'):
     print(summary)
     if not webhook_url:
-        print('Discord notification skipped (no webhook configured). Check reservation status in Resy.')
         return
-    data = {"content": message}
-    requests.post(webhook_url, json=data)
+    parsed = urlparse(webhook_url)
+    if (
+        parsed.scheme != 'https'
+        or parsed.hostname not in {'discord.com', 'discordapp.com'}
+        or not parsed.path.startswith('/api/webhooks/')
+    ):
+        print('Discord notification skipped: unsupported destination.')
+        return
+    try:
+        response = requests.post(
+            webhook_url, json={'content': summary}, timeout=(3, 5), allow_redirects=False
+        )
+        if response.status_code not in (200, 204):
+            print('Discord notification failed; task outcome is unchanged.')
+    except requests.RequestException:
+        print('Discord notification failed; task outcome is unchanged.')
 
-def run_tasks_concurrently(tasks, capsolver_key, capmonster_key, proxies, webhook_url):
-    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-        futures = [executor.submit(execute_task, task, capsolver_key, capmonster_key, proxies, webhook_url) for task in tasks]
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                print('Failed to execute task')
-                print(e)
+
+def run_tasks_concurrently(
+    tasks,
+    capsolver_key='',
+    capmonster_key='',
+    proxies=None,
+    webhook_url='',
+    *,
+    control=None,
+    dry_run=True,
+    state=None,
+):
+    if not tasks:
+        return []
+    control = control or RunControl()
+    results = []
+    with ThreadPoolExecutor(max_workers=min(len(tasks), 4)) as executor:
+        futures = [
+            executor.submit(
+                execute_task,
+                task,
+                capsolver_key,
+                capmonster_key,
+                proxies,
+                webhook_url,
+                control=control,
+                dry_run=dry_run,
+                state=state,
+            )
+            for task in tasks
+        ]
+        try:
+            for future in as_completed(futures):
+                results.append(future.result())
+        except KeyboardInterrupt:
+            control.stop()
+            for future in futures:
+                future.cancel()
+            raise
+    return results

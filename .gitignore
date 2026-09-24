@@ -5,6 +5,9 @@ info.json
 resrevations.json
 accounts.json
 license_key.json
+access_key.json
+schedules.json
+booking-state.json
 **/suspicious_commits.txt
 
 # Python cache files
@@ -48,7 +51,15 @@ env/
 ENV/
 .env
 .venv
+.venv*/
 *-venv/
+.state/
+*.sqlite3
+*.sqlite3-*
+.local-server-token
+secrets/
+*.pem
+*.key
 
 # IDE specific files
 .idea/
