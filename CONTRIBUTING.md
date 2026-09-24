@@ -34,6 +34,12 @@ pip-compile --generate-hashes --no-emit-index-url --no-emit-trusted-host -o requ
 pip-compile --generate-hashes --no-emit-index-url --no-emit-trusted-host -o requirements-dev.lock requirements-dev.in
 ```
 
+For workflow changes, validate YAML locally with Go installed:
+
+```sh
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/ci.yml
+```
+
 Test the resolved versions on the CI Python matrix before merging. Dependency pins
 and a passing advisory scan are not a complete supply-chain review. Keep the original
 MIT license and attribution. Submit changes as draft pull requests.
