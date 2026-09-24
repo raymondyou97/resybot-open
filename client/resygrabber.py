@@ -469,6 +469,8 @@ def delete_account():
 
 def get_random_proxy():
     proxies = load_data(PROXIES_FILE, [])
+    if not proxies:
+        return {}
     proxy = random.choice(proxies)
     ip_port, user_pass = proxy.rsplit(':', 2)[0], proxy.rsplit(':', 2)[1:]
     proxiesObj = {
@@ -1030,8 +1032,7 @@ def start_tasks():
         click.echo('No tasks found. Please add tasks before starting.')
         return
     if not proxies:
-        click.echo('No proxies found. Please add proxies before starting.')
-        return
+        click.echo('No proxies configured; using the default network connection.')
     if not info:
         click.echo('No user info found. Please set user info before starting.')
         return

@@ -83,10 +83,15 @@ The client will launch a menu-driven interface where you can:
 2. Follow the prompts to add your Resy.com account information
    - You'll need your Auth Token and Payment ID from Resy.com
 
-### Adding Proxies (Optional but Recommended)
+### Proxies (Optional for Reservation Tasks)
 
-1. From the main menu, select "2) Proxies"
-2. Add your proxy information to avoid IP rate limits
+Leave the proxy list empty to use the default network connection for immediate or
+scheduled reservation tasks, viewing reservations, and cancellation. Standard HTTP
+proxy environment variables still apply if configured on your machine. Existing
+configured proxies continue to work.
+
+The separate account-generation feature is unchanged and still requires a proxy.
+This setting does not change CAPTCHA handling or override platform rate limits.
 
 ### Creating Tasks
 
@@ -97,6 +102,11 @@ The client will launch a menu-driven interface where you can:
 ### Running Tasks
 
 1. From the main menu, select "7) Start Tasks"
+
+## Offline Tests
+
+Run `python3 -m unittest discover -s tests -v` from the repository root. These tests
+use mocked dependencies and do not contact Resy, load account files, or book anything.
 
 ## Contributing
 

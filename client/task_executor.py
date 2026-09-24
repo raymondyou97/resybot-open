@@ -41,7 +41,7 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
 
     while True:
         try:
-            select_proxy = format_proxy(random.choice(proxies))
+            select_proxy = format_proxy(random.choice(proxies)) if proxies else {}
 
             url = f"https://api.resy.com/4/venue/calendar?venue_id={restaurant_id}&num_seats={party_sz}&start_date={start_date}&end_date={end_date}"
             response = requests.get(url, headers=headers, proxies=select_proxy)
