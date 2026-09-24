@@ -19,7 +19,7 @@ PLAN_PATH = Path(__file__).resolve().parents[1] / 'reservations.txt'
 SETTINGS_FILE = 'reservation-settings.json'
 POLICY_FIELDS = ('accept_terms', 'currency', 'max_total_charge', 'max_cancellation_fee')
 REQUIRED = {'url', 'venue_id', 'party_size', 'start_date', 'end_date', 'start_time', 'end_time', 'timezone'}
-ALLOWED = REQUIRED | {'name', 'poll_interval_ms', 'campaign_id'}
+ALLOWED = REQUIRED | {'name', 'poll_interval_ms', 'campaign_id', 'availability_mode'}
 
 
 def validate_url(value):
@@ -59,6 +59,9 @@ def load_goals():
             validate_url(values['url'])
             if not re.fullmatch(r'[0-9]+', values['venue_id']) or int(values['venue_id']) <= 0:
                 raise ValueError
+            mode = values.get('availability_mode', 'dates')
+            if mode not in ('calendar', 'dates'):
+                raise ValueError
             party = int(values['party_size'])
             delay = int(values.get('poll_interval_ms', '60000'))
             if not 1 <= party <= 20 or not 1000 <= delay <= 86400000:
@@ -80,6 +83,7 @@ def load_goals():
                 'end_time': values['end_time'],
                 'timezone': values['timezone'],
                 'delay': delay,
+                'availability_mode': mode,
                 'campaign_id': values.get('campaign_id', goal_id),
             }
             if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', goal['campaign_id']):

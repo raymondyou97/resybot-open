@@ -137,6 +137,17 @@ class ReservationPlanTests(OfflineTest):
             with self.subTest(start=start, end=end), self.assertRaises(ValueError):
                 time_window(task(start_time=start, end_time=end))
 
+    def test_calendar_mode_is_loaded_from_public_plan(self):
+        self.write_plan(PLAN + 'availability_mode = calendar\n')
+        self.account()
+        goal = plan.load_goals()[0]
+        self.assertEqual(goal['availability_mode'], 'calendar')
+        self.assertEqual(goal['delay'], 60000)
+        self.assertEqual(plan.load_tasks()[0]['availability_mode'], 'calendar')
+        self.write_plan(PLAN + 'availability_mode = unsupported\n')
+        with self.assertRaises(ValueError):
+            plan.load_goals()
+
     def test_target_edit_requires_new_fee_approval(self):
         self.write_plan()
         account = self.account()

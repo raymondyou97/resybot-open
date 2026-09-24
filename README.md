@@ -10,8 +10,8 @@ Review Resy's current terms before use; use only your own account for personal d
 
 ## What this fork does—and does not claim
 
-- Direct single-date availability lookup, optional fixed proxy configuration, and
-  identifiable restaurant/date progress logs.
+- Whole-range calendar prefiltering followed by exact date/time slot lookups,
+  optional fixed proxy configuration, and identifiable restaurant/date progress logs.
 - Bounded worker duration and cooperative stop controls. No worker starts on import.
 - Persistent one-booking campaign claims across processes and restarts.
 - Automatic submission only after configured charge ceilings and required quote
@@ -94,8 +94,11 @@ One successful booking completes a goal, not one reservation for every date.
 
 Use `HH:MM` times, ISO `YYYY-MM-DD` dates, and an IANA timezone. The optional
 `campaign_id` groups alternative venues; otherwise the section name is the campaign.
-`poll_interval_ms` defaults to 60000 and applies between each date lookup. The plan
-lives in the repository root regardless of the launch directory or `RESY_DATA_DIR`.
+`availability_mode = calendar` checks the whole range first; `dates` retains direct
+per-date scanning. Both checked-in goals use calendar mode. `poll_interval_ms` defaults
+to 60000: it is the pause between complete calendar sweeps in calendar mode, or between
+each date lookup in dates mode. The plan lives in the repository root regardless of
+the launch directory or `RESY_DATA_DIR`.
 
 **Never put credentials, payment IDs, account aliases, or fee approvals in this file.**
 The loader binds the sole local account automatically for dry runs, or uses the account
@@ -126,16 +129,16 @@ Start Tasks launches all active plan goals. It does **not** also launch old save
 # Offline plan/date/time check; no credentials or network required:
 python client/entry.py --check
 
-# One read-only pass per goal; each 11-day window waits 60 seconds per date:
-python client/entry.py --dry-run --duration 900
+# One read-only calendar pass per goal, followed by slots on available dates:
+python client/entry.py --dry-run --duration 120
 ```
 
 Dry-run does not call the details or booking endpoints, create submission claims,
 charge a card, or change existing reservations. It does not prove checkout readiness.
 It still queries Resy and may encounter rate limits. A duration shorter than the full
-scan can end before every requested date is checked. The default 120-second run
-covers only part of the checked-in 11-day plan at its 60-second polling interval;
-allow about 15 minutes for a complete dry-run pass.
+scan can end before every requested date is checked. If using direct date mode or
+falling back to it, an 11-day window at 60 seconds per date needs about 15 minutes
+for a complete dry-run pass (`--duration 900`).
 
 ### Time and polling
 
@@ -145,10 +148,25 @@ are exact and inclusive: `20:00` excludes `20:01` and `20:59`. Legacy integer-ho
 retain their original convention: an end hour of 19 includes 19:00 through 19:59.
 The selected slot must explicitly report the requested calendar date and venue.
 
-The delay applies **between each date lookup**, with a minimum of one second—not
-once per restaurant. Multiple tasks have independent workers, so their rates add up.
-These defaults are not a claim about Resy's permitted request rate. Do not use
-parallel tasks or proxy rotation to evade limits. HTTP failures stop without retry.
+In **calendar mode**, one request checks the complete date range and party size.
+Only dates marked available receive exact slot queries; sold-out/closed dates are
+skipped. The reported release horizon accounts for dates not yet open for booking;
+the full requested range is queried again each sweep so newly released dates can appear.
+The response must cover every requested date within that horizon; incomplete or
+unknown data is not interpreted as no availability.
+
+The configured pause is applied after each sweep, with at least one second between
+slot-date queries. With no available dates, the checked-in goals each use roughly one
+calendar request per minute—rather than one 11-minute sweep. Available dates add
+slot requests and latency. Calendars can be cached or change before checkout, so this
+improves coverage frequency, not a guarantee of inventory or booking success.
+
+A calendar 404/405 or 500/502/503/504 disables the calendar for that worker run and
+falls back to paced direct-date checks. In **dates mode**, the pause applies between
+each date lookup. Authentication, access, and rate-limit errors (including 401/403/429)
+stop without retry or fallback; malformed calendars also stop. Multiple goals have
+independent workers, so their rates add up. Do not use parallel tasks or proxy rotation
+to evade limits. These defaults are not a claim about Resy's permitted request rate.
 
 Schedules use **America/New_York**, persist across client restarts, and reference a
 stable task identity instead of a mutable list index. Weekly means the selected
@@ -271,7 +289,8 @@ and secret checks. Never add real account credentials or live bookings to CI.
 - `reservations.txt`, `client/reservation_plan.py`: public targets with private runtime bindings.
 - `client/time_window.py`: exact-minute filtering and legacy-hour compatibility.
 - `client/resygrabber.py`: existing terminal workflow and configuration prompts.
-- `client/task_executor.py`: bounded automatic worker and local bridge calls.
+- `client/task_executor.py`: automatic worker and local bridge calls.
+- `client/availability.py`: whole-range calendar validation and available-date selection.
 - `client/control.py`, `client/scheduling.py`: cancellation, deadlines, persisted scheduling.
 - `client/booking_state.py`: atomic durable campaign claims and verification holds.
 - `client/fees.py`, `client/verification.py`, `client/reservations.py`: charge limits,

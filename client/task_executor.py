@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from client.booking_state import BookingState, CampaignBlocked
+from client.availability import calendar_available_dates
 from client.control import RunControl
 from client.fees import FeePolicyError, validate_policy, validate_quote
 from client.http_headers import CLIENT_USER_AGENT
@@ -80,7 +81,13 @@ def execute_task(
         ):
             raise ValueError('Invalid restaurant ID or party size.')
         label = f'Restaurant {venue_id}'
+        if task.get('restaurant_name'):
+            label = f'{safe_label(task["restaurant_name"])} (ID {venue_id})'
         start_minute, end_minute = time_window(task)
+        mode = task.get('availability_mode', 'dates')
+        if mode not in ('dates', 'calendar'):
+            raise ValueError('Invalid availability mode.')
+        use_calendar = mode == 'calendar'
         pause_seconds = max(float(task['delay']) / 1000, 1.0)
         if not 0 < pause_seconds <= 86400:
             raise ValueError('Invalid polling delay.')
@@ -95,7 +102,42 @@ def execute_task(
             if not future_days:
                 report('All requested dates are in the past; stopped.')
                 return 'stopped'
-            for day in future_days:
+            if state and state.blocked(task):
+                report('Campaign already succeeded or has an unresolved attempt; stopped.')
+                return 'blocked'
+            scan_days = future_days
+            if use_calendar:
+                response = requests.get(
+                    'https://api.resy.com/4/venue/calendar',
+                    params={
+                        'venue_id': venue_id,
+                        'num_seats': party,
+                        'start_date': future_days[0],
+                        'end_date': future_days[-1],
+                    },
+                    headers=headers,
+                    proxies=proxy,
+                    timeout=control.timeout(),
+                    allow_redirects=False,
+                )
+                if control.stopped():
+                    return 'stopped'
+                if response.status_code == 200:
+                    scan_days = calendar_available_dates(response.json(), future_days)
+                    print(
+                        f'[{label}] Calendar {future_days[0]}–{future_days[-1]}: '
+                        f'{len(scan_days)} available date(s).'
+                    )
+                elif response.status_code in (404, 405, 500, 502, 503, 504):
+                    report(
+                        f'Calendar unavailable (HTTP {response.status_code}); '
+                        'switching to paced per-date checks for this run.'
+                    )
+                    use_calendar = False
+                else:
+                    report(f'Calendar failed (HTTP {response.status_code}); stopped without retry.')
+                    return 'failed'
+            for day in scan_days:
                 if control.stopped():
                     return 'stopped'
                 if state and state.blocked(task):
@@ -185,11 +227,18 @@ def execute_task(
                             return 'confirmed'
                         report('Submission was not verified in the account. Hold retained; do not retry.')
                         return 'awaiting-verification'
-                print(f'[{label}] No further matching slots for {day}; waiting {pause_seconds:g} seconds.')
-                if control.wait(pause_seconds):
+                date_pause = 1.0 if use_calendar else pause_seconds
+                print(f'[{label}] No further matching slots for {day}; waiting {date_pause:g} seconds.')
+                if control.wait(date_pause):
                     return 'stopped'
             if dry_run:
                 return 'dry-run-complete'
+            if use_calendar:
+                print(
+                    f'[{label}] Waiting {pause_seconds:g} seconds before the next whole-range calendar check.'
+                )
+                if control.wait(pause_seconds):
+                    return 'stopped'
     except CampaignBlocked:
         report('Campaign already claimed or completed; stopped.')
         return 'blocked'
