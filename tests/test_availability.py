@@ -156,6 +156,31 @@ class AvailabilityTests(OfflineTest):
         self.assertEqual(self.run_task(task(start_date='2000-01-01', end_date='2000-01-02')), 'stopped')
         self.get.assert_not_called()
 
+    def test_expired_same_day_slot_never_enters_checkout(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        today = datetime.now(ZoneInfo('America/New_York')).date().isoformat()
+        self.get.return_value.json.return_value = availability(
+            slots=[
+                {'date': {'start': f'{today} 00:00:00'}, 'config': {'token': 'fixture'}},
+            ]
+        )
+        self.assertEqual(
+            self.run_task(task(start_date=today, end_date=today, start_time=0), dry_run=True),
+            'dry-run-complete',
+        )
+        self.details.assert_not_called()
+
+    def test_aware_slot_time_is_converted_to_venue_timezone(self):
+        from client.verification import slot_datetime
+
+        self.assertEqual(
+            slot_datetime({'date': {'start': '2099-01-02T00:30:00+00:00'}}, '2099-01-01'), '19:30'
+        )
+        with self.assertRaises(ValueError):
+            slot_datetime({'date': {'start': '2099-01-02T00:30:00+00:00'}}, '2099-01-02')
+
     def test_logs_identify_restaurant_without_credentials(self):
         self.get.return_value.json.return_value = availability(slots=[])
         output = io.StringIO()

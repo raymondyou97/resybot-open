@@ -127,7 +127,11 @@ def execute_task(
                     if metadata.get('name'):
                         label = f'{safe_label(metadata["name"])} (ID {venue_id})'
                     for slot in venue.get('slots', []):
-                        clock = slot_datetime(slot, day)
+                        timezone = ZoneInfo(task.get('timezone', 'America/New_York'))
+                        clock = slot_datetime(slot, day, str(timezone))
+                        slot_at = datetime.fromisoformat(f'{day}T{clock}').replace(tzinfo=timezone)
+                        if slot_at <= datetime.now(timezone):
+                            continue
                         if not start_hour <= int(clock[:2]) <= end_hour:
                             continue
                         if dry_run:

@@ -1,6 +1,7 @@
 """Read-only confirmation checks; never treat a booking HTTP response as proof."""
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -49,11 +50,13 @@ def matching_reservation(data, venue_id, day, clock, party):
     return reservation_reference(matches[0])
 
 
-def slot_datetime(slot, day):
+def slot_datetime(slot, day, time_zone='America/New_York'):
     raw = slot.get('date', {}).get('start')
     if not isinstance(raw, str):
         raise ValueError('Slot did not expose an explicit date and time.')
     parsed = datetime.fromisoformat(raw)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(ZoneInfo(time_zone))
     if parsed.date().isoformat() != day:
         raise ValueError('Slot date does not match the requested date.')
     return parsed.strftime('%H:%M')

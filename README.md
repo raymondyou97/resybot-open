@@ -97,7 +97,8 @@ scan can end before every requested date is checked.
 
 ### Time and polling
 
-Ranges are inclusive, limited to 31 days. Past dates are skipped. Hours remain the
+Ranges are inclusive, limited to 31 days. Past dates and expired same-day slots are
+skipped; offset-aware slot times are normalized to the venue timezone. Hours remain the
 original integer-hour convention: an end hour of 19 includes 19:00 through 19:59.
 The selected slot must explicitly report the requested calendar date and venue.
 
