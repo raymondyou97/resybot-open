@@ -64,6 +64,7 @@ def reservation(**overrides):
         'day': '2099-01-01',
         'time_slot': '18:30:00',
         'num_seats': 2,
+        'reservation_id': 12345,
         'resy_token': 'fixture-reservation-token',
         'cancellation': {'fee': {'amount': 0}},
         **overrides,

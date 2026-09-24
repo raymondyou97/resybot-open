@@ -39,6 +39,8 @@ def list_account(account):
 def cancellation_cost(row, now):
     try:
         fee = row['cancellation']['fee']
+        if fee['amount'] is None and fee.get('applies') is False:
+            return amount(0)
         cost = amount(fee['amount'])
         if cost == 0:
             return cost
@@ -75,6 +77,11 @@ def cancel_verified(account, record, max_fee=0, state=None):
         record['num_seats'],
     ):
         raise VerificationError('Reservation details changed; refresh and review before cancelling.')
+    if current.get('cancellation', {}).get('allowed') is False:
+        raise VerificationError('Cancellation is not allowed by the current account response.')
+    cancellation_token = current.get('resy_token')
+    if not isinstance(cancellation_token, str) or not cancellation_token.strip():
+        raise VerificationError('Cancellation token is missing; no request submitted.')
     if cancellation_cost(current, now) > amount(max_fee):
         raise FeePolicyError('Cancellation charge exceeds the approved ceiling.')
     cached = load_data(CACHE, [])
@@ -89,7 +96,7 @@ def cancel_verified(account, record, max_fee=0, state=None):
         response = requests.post(
             'https://api.resy.com/3/cancel',
             headers=headers,
-            data={'resy_token': current['resy_token']},
+            data={'resy_token': cancellation_token},
             timeout=(3, 5),
             allow_redirects=False,
         )

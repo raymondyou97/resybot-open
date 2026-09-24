@@ -131,18 +131,25 @@ Live tasks require:
 | `max_total_charge` | Maximum reported total charge for the reservation |
 | `max_cancellation_fee` | Maximum cancellation exposure for the party |
 
-The quote adapter requires explicit `payment.amounts.total`, quote currency, and
-`cancellation.fee.amount`. Missing/ambiguous fields, nonfinite or negative amounts,
-and currency/ceiling mismatches stop before submission. Cancellation amounts are
-conservatively multiplied by party size; this may reject an acceptable per-reservation
-fee rather than underestimate a per-person fee. Do not raise ceilings merely to get
-past a rejection.
+The quote adapter requires an explicit `payment.amounts.total` and cancellation
+fee field. Monetary quotes also require currency and `cancellation.fee.amount`.
+The observed free-quote form has `payment.config.type: "free"`, an explicit zero
+total, and `cancellation.fee: null`. That combination is supported as no configured
+cancellation fee; an absent fee key is still rejected. Omitted currency is allowed
+only for explicitly free quotes with both charge and cancellation amounts zero.
+A present but conflicting currency, a positive charge, or an unknown payment type
+does not qualify for that exception.
 
-**The hardened quote adapter has synthetic offline coverage, not a verified live
-production quote fixture.** Some upstream responses omit currency or amount fields;
-those tasks will stop, even where the legacy bot would have submitted blindly. This
-is a known compatibility limitation, not a reason to infer a zero charge. A new fee
-or policy layout needs reviewed adapter support before unattended booking is safe.
+Nonfinite/negative amounts and ceiling mismatches stop submission. Cancellation
+amounts are conservatively multiplied by party size; this may reject an acceptable
+per-reservation fee rather than underestimate a per-person fee. Do not raise
+ceilings merely to get past a rejection.
+
+**Live validation is limited to one free reservation confirmed in the account and
+subsequently cancelled with no applicable fee.** That exercise required correcting
+response parsing and reservation identity before cancellation completed; it was not
+an uninterrupted end-to-end pass. Other venue/payment formats remain unverified.
+Offline fixtures use synthetic data; no account credentials or raw quotes are published.
 
 ### Success, duplicates, and unresolved holds
 
@@ -155,7 +162,9 @@ An HTTP 201 or a reservation ID alone is **not success**. The worker checks the 
 venue, date, clock time, and party size in Upcoming Reservations. A confirmed result
 persists and suppresses later runs of that campaign. Other campaigns are unaffected.
 Every returned reservation must have a valid venue, calendar date, party size, and
-stable reference. Supported account times are `HH:MM` or `HH:MM:00`; other formats
+stable reference derived from `reservation_id` (or `id`), not the rotating
+`resy_token` used to authorize cancellation. Supported account times are `HH:MM`
+or `HH:MM:00`; other formats
 are not silently truncated. An incomplete or unsupported entry makes the entire
 account check unresolved, even when another entry matches. It cannot authorize
 checkout, hold release, or cancellation cleanup.
@@ -176,7 +185,10 @@ View Reservations refreshes the account and does not expose opaque reservation l
 or account tokens. Cancellation requires explicit selection/confirmation and a charge
 ceiling. The reservation is checked before the request and again afterward. A failed
 request, uncertain result, or still-present reservation leaves the local record and
-hold intact. The tool does not infer a free cancellation from absent policy data.
+hold intact. An explicit `cancellation.fee.applies: false` with a null amount is
+recognized as no currently applicable fee. Missing applicability/amount fields are
+not treated as free. Current account permission and fee data are checked immediately
+before dispatch; disappearance is checked using the stable reservation identifier.
 
 ## Security and development
 

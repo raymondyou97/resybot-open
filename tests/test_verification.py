@@ -38,11 +38,11 @@ class VerificationTests(OfflineTest):
             reservation(num_seats=True),
             reservation(num_seats='2'),
             reservation(num_seats=0),
-            reservation(resy_token=None),
-            reservation(resy_token=''),
-            reservation(resy_token='   '),
-            reservation(resy_token={'private': 'fixture-private-value'}),
-            reservation(resy_token=True),
+            reservation(reservation_id=None),
+            reservation(reservation_id=''),
+            reservation(reservation_id='   '),
+            reservation(reservation_id={'private': 'fixture-private-value'}),
+            reservation(reservation_id=True),
         ]
         for index, row in enumerate(malformed):
             with (
@@ -70,8 +70,15 @@ class VerificationTests(OfflineTest):
     def test_reference_requires_nonempty_scalar_identifier(self):
         for value in (None, '', ' ', {}, ['fixture'], True, False, 0, -1):
             with self.subTest(value_type=type(value).__name__), self.assertRaises(ValueError):
-                reservation_reference(reservation(resy_token=value))
-        self.assertTrue(reservation_reference(reservation(resy_token=None, reservation_id=123)))
+                reservation_reference(reservation(reservation_id=value))
+        self.assertTrue(reservation_reference(reservation(reservation_id=None, id=123)))
+
+    def test_identity_does_not_depend_on_rotating_cancellation_token(self):
+        first = reservation(resy_token='fixture-first-token')
+        refreshed = reservation(resy_token='fixture-refreshed-token')
+        self.assertEqual(reservation_reference(first), reservation_reference(refreshed))
+        with self.assertRaises(ValueError):
+            reservation_reference(reservation(reservation_id=None))
 
     def test_malformed_preflight_never_enters_checkout(self):
         with (
@@ -125,7 +132,7 @@ class VerificationTests(OfflineTest):
                 'client.verification.requests.get',
                 side_effect=[
                     response({'reservations': [reservation()]}),
-                    response({'reservations': [reservation(resy_token={})]}),
+                    response({'reservations': [reservation(reservation_id={})]}),
                 ],
             ),
             patch('client.reservations.requests.post', return_value=Mock(status_code=200)),

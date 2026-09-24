@@ -115,6 +115,31 @@ class LocalServerTests(OfflineTest):
         self.assertNotIn('fixture-private-url', response.text)
         self.assertEqual(self.state.get(key)['status'], 'dispatching')
 
+    def test_explicit_free_quote_with_null_fee_can_be_reviewed(self):
+        key = self.state.claim(task(max_total_charge='0', max_cancellation_fee='0'), '2099-01-01', '18:30')
+        payload = {
+            'claim_id': key,
+            'day': '2099-01-01',
+            'party_size': 2,
+            'config_token': 'fixture',
+            'restaurant_id': '123',
+            'headers': {'Authorization': 'fixture', 'X-Resy-Auth-Token': 'fixture'},
+        }
+        raw = {
+            'book_token': {'value': 'fixture-book'},
+            'payment': {'amounts': {'total': 0.0}, 'config': {'type': 'free'}},
+            'cancellation': {'fee': None},
+        }
+        with patch('server.server.httpx.AsyncClient') as cls:
+            upstream = AsyncMock()
+            upstream.get.return_value = Mock(status_code=200, json=lambda: raw)
+            cls.return_value.__aenter__.return_value = upstream
+            result = self.client.post('/api/get-details', json=payload, headers=self.headers)
+        self.assertEqual(result.status_code, 200)
+        self.assertIsNone(result.json()['details']['cancellation']['fee'])
+        self.assertTrue(self.state.get(key)['quote_ref'])
+        upstream.post.assert_not_called()
+
     def test_details_omit_account_and_payment_method_data(self):
         key = self.state.claim(task(), '2099-01-01', '18:30')
         payload = {

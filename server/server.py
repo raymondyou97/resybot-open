@@ -18,7 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
 from client.booking_state import BookingState, CampaignBlocked  # noqa: E402
 from client.local_auth import local_token  # noqa: E402
 from client.http_headers import CLIENT_USER_AGENT  # noqa: E402
-from client.fees import FeePolicyError, validate_quote  # noqa: E402
+from client.fees import FeePolicyError, quote_summary, validate_quote  # noqa: E402
 
 
 logger = logging.getLogger(__name__)
@@ -132,17 +132,7 @@ def create_app(token=None, booking_state=None):
             if response.status_code != 200:
                 raise HTTPException(502, 'Upstream details request failed.')
             raw = response.json()
-            payment = raw.get('payment', {})
-            details = {
-                'payment': {
-                    'amounts': payment.get('amounts', {}),
-                    'config': {
-                        'currency': payment.get('config', {}).get('currency'),
-                    },
-                },
-                'cancellation': {'fee': {'amount': raw.get('cancellation', {}).get('fee', {}).get('amount')}},
-                'currency': raw.get('currency'),
-            }
+            details = quote_summary(raw)
             validate_quote(json.loads(claim['policy'] or '{}'), details)
             book_token = raw['book_token']['value']
             state.bind_quote(data.claim_id, book_token)

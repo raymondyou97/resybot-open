@@ -32,17 +32,51 @@ def validate_policy(task):
         raise FeePolicyError('Live tasks require an explicit three-letter currency.')
 
 
+def quote_summary(raw):
+    """Keep only fee fields, preserving absent fields versus explicit no-fee values."""
+    try:
+        payment = raw['payment']
+        config = payment['config']
+        cancellation = raw['cancellation']
+        if not all(isinstance(value, dict) for value in (payment, config, cancellation)):
+            raise TypeError
+        fee = cancellation['fee']
+        if fee is not None and not isinstance(fee, dict):
+            raise TypeError
+        return {
+            'payment': {
+                'amounts': {'total': payment['amounts']['total']},
+                'config': {'currency': config.get('currency'), 'type': config.get('type')},
+            },
+            'cancellation': {'fee': None if fee is None else {'amount': fee['amount']}},
+            'currency': raw.get('currency'),
+        }
+    except (KeyError, TypeError):
+        raise FeePolicyError('Quote lacks verified charge/cancellation fields; not submitting.') from None
+
+
 def validate_quote(task, details):
     validate_policy(task)
     try:
         payment = details['payment']
-        currency = payment['config'].get('currency') or details.get('currency')
+        config = payment['config']
+        currency = config.get('currency')
+        if currency is None:
+            currency = details.get('currency')
         total = amount(payment['amounts']['total'])
-        cancellation = amount(details['cancellation']['fee']['amount']) * task['party_sz']
-    except (KeyError, TypeError):
+        explicitly_free = config.get('type') == 'free' and total == 0
+        fee = details['cancellation']['fee']
+        if fee is None:
+            if not explicitly_free:
+                raise FeePolicyError('A null cancellation fee requires an explicitly free, zero-total quote.')
+            cancellation = amount(0)
+        else:
+            cancellation = amount(fee['amount']) * task['party_sz']
+    except (KeyError, TypeError, AttributeError):
         raise FeePolicyError('Quote lacks verified charge/cancellation fields; not submitting.') from None
     if currency != task['currency']:
-        raise FeePolicyError('Quote currency is missing or differs from the task; not submitting.')
+        if not (currency is None and explicitly_free and cancellation == 0):
+            raise FeePolicyError('Quote currency is missing or differs from the task; not submitting.')
     if total > amount(task['max_total_charge']):
         raise FeePolicyError('Total charge exceeds the approved ceiling; not submitting.')
     if cancellation > amount(task['max_cancellation_fee']):

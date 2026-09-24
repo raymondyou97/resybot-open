@@ -171,6 +171,42 @@ class CancellationTests(OfflineTest):
             self.assertEqual(len(load_data('resrevations.json', [])), 1)
             self.assertTrue(load_data('resrevations.json', [])[0]['cancellation_pending'])
 
+    def test_explicit_nonapplicable_fee_allows_free_cancellation(self):
+        current = reservation(cancellation={'allowed': True, 'fee': {'amount': None, 'applies': False}})
+        with (
+            patch(
+                'client.reservations.upcoming',
+                side_effect=[{'reservations': [current]}, {'reservations': []}],
+            ),
+            patch('client.reservations.requests.post', return_value=Mock(status_code=200)) as post,
+        ):
+            self.assertTrue(cancel_verified(self.account, self.record, state=self.state))
+        post.assert_called_once()
+
+    def test_rotating_token_does_not_falsely_prove_cancellation(self):
+        refreshed = reservation(resy_token='fixture-refreshed-token')
+        with (
+            patch(
+                'client.reservations.upcoming',
+                side_effect=[{'reservations': [self.raw]}, {'reservations': [refreshed]}],
+            ),
+            patch('client.reservations.requests.post', return_value=Mock(status_code=200)),
+            self.assertRaises(VerificationError),
+        ):
+            cancel_verified(self.account, self.record, state=self.state)
+        self.assertTrue(load_data('resrevations.json', [])[0]['cancellation_pending'])
+
+    def test_null_fee_without_explicit_waiver_never_submits(self):
+        for applies in (None, True, 0, 'false'):
+            current = reservation(cancellation={'fee': {'amount': None, 'applies': applies}})
+            with (
+                patch('client.reservations.upcoming', return_value={'reservations': [current]}),
+                patch('client.reservations.requests.post') as post,
+                self.assertRaises(FeePolicyError),
+            ):
+                cancel_verified(self.account, self.record, state=self.state)
+            post.assert_not_called()
+
     def test_unknown_cancellation_fee_never_submits(self):
         raw = reservation(cancellation={})
         with (
@@ -183,7 +219,10 @@ class CancellationTests(OfflineTest):
 
     def test_multiple_reservations_parse_without_shadowing_response(self):
         data = {
-            'reservations': [reservation(), reservation(resy_token='second-fixture', venue={'id': 456})],
+            'reservations': [
+                reservation(),
+                reservation(reservation_id=67890, resy_token='second-fixture', venue={'id': 456}),
+            ],
             'venues': {'123': {'name': 'First'}, '456': {'name': 'Second'}},
         }
         with patch('client.reservations.upcoming', return_value=data), redirect_stdout(io.StringIO()):

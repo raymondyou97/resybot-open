@@ -33,9 +33,11 @@ proxy credentials, opaque reservation URLs, or historical server logs.
 ## Remaining limitations
 
 The application cannot guarantee inventory or successful checkout. It cannot solve
-CAPTCHA or payment/identity verification. Fee parsing is intentionally conservative
-and has only synthetic offline coverage in this fork; missing fields stop submission.
-An account response may also change, making confirmation unresolved. Holds must stay
+CAPTCHA or payment/identity verification. Fee parsing has offline regression coverage
+and one live free-reservation booking/cancellation exercise, which required compatibility
+repairs during testing. This is not evidence of broad unattended readiness. See the
+README for the narrowly supported explicit-free/null-fee form; absent or unknown fee
+fields still stop submission. An account response may also change, making confirmation unresolved. Holds must stay
 in place until the operator verifies the result. HTTP request timeouts bound normal
 in-flight waits, but cooperative cancellation is not an operating-system process kill.
 
