@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from client.config_store import load_data, save_data
 from client.control import RunControl
 from client.task_executor import run_tasks_concurrently
+from client.reservation_plan import load_tasks
 
 
 TIMEZONE = ZoneInfo('America/New_York')
@@ -32,6 +33,12 @@ def task_id(task):
             'campaign_id',
         )
     }
+    if task.get('goal_id'):
+        identity.update(
+            goal_id=task['goal_id'],
+            timezone=task.get('timezone'),
+            reservation_url=task.get('reservation_url'),
+        )
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
@@ -124,7 +131,11 @@ class TaskManager:
         # Consume one-shot jobs before starting; a crash cannot repeat a submission.
         if spec['repeat'] == 'Once':
             self.remove_spec(spec['id'])
-        tasks = load_data('tasks.json', [])
+        try:
+            tasks = load_tasks()
+        except (ValueError, OSError, KeyError):
+            print('Scheduled target configuration is invalid; skipped without booking.')
+            return
         task = next((task for task in tasks if task_id(task) == spec['task_id']), None)
         if task is None:
             print('Scheduled task no longer exists; skipped without substituting another task.')

@@ -188,6 +188,29 @@ class AvailabilityTests(OfflineTest):
         with self.assertRaises(ValueError):
             slot_datetime({'date': {'start': '2099-01-02T00:30:00+00:00'}}, '2099-01-02')
 
+    def test_exact_minute_window_includes_2000_but_not_2001(self):
+        for clock, expected in [
+            ('16:59', False),
+            ('17:00', True),
+            ('19:45', True),
+            ('20:00', True),
+            ('20:01', False),
+            ('20:59', False),
+        ]:
+            self.get.return_value.json.return_value = availability(
+                slots=[
+                    {'date': {'start': f'2099-01-01 {clock}:00'}, 'config': {'token': 'fixture'}},
+                ]
+            )
+            output = io.StringIO()
+            with self.subTest(clock=clock), redirect_stdout(output):
+                result = worker.execute_task(
+                    task(start_time='17:00', end_time='20:00'), control=self.control, dry_run=True
+                )
+            self.assertEqual(result, 'dry-run-complete')
+            self.assertEqual('DRY RUN: matching slot' in output.getvalue(), expected)
+        self.book.assert_not_called()
+
     def test_logs_identify_restaurant_without_credentials(self):
         self.get.return_value.json.return_value = availability(slots=[])
         output = io.StringIO()

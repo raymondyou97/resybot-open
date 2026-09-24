@@ -64,42 +64,77 @@ and client environments to use another private directory.
 - Reads/writes restrict configuration files to mode 0600. This is not encryption.
 - Existing account aliases must stay stable and unique. Do not configure the same
   physical account under multiple aliases or rename an alias during a campaign.
-- Legacy tasks remain readable, but need the new fee/terms configuration before live
-  submission: **Show tasks → Configure fee limits/terms**.
+- The committed `reservations.txt` is now the active target source. Existing
+  `tasks.json` files are preserved but ignored while that file exists. Configure
+  the active goals under **Show tasks → Configure account and fee limits**.
 - Existing solver keys in `info.json` are ignored, not displayed or sent anywhere.
 - Schedules are now saved in `schedules.json`. Old in-memory schedules cannot be recovered.
 - Never run the older client alongside the hardened version. One client per data
   directory is enforced; SQLite guards also protect cross-process claims.
 
+## Committed reservation targets
+
+Edit the root [`reservations.txt`](reservations.txt) to describe what to book. It is
+an INI-format text file with one named section per goal; it is intended to be committed.
+The checked-in target is Double Chicken Please/The Coop, party of two, September 26
+through October 6, 2026, inclusive, **17:00 through exactly 20:00 America/New_York**.
+
+The explicit date, party, and time fields control the search; the URL's `date` and
+`seats` query parameters are only a reference. `venue_id` is the API booking target:
+keep it consistent with the venue URL. This loader does not resolve URLs over the network.
+One successful booking completes a goal, not one reservation for every date.
+
+Use `HH:MM` times, ISO `YYYY-MM-DD` dates, and an IANA timezone. The optional
+`campaign_id` groups alternative venues; otherwise the section name is the campaign.
+`poll_interval_ms` defaults to 60000 and applies between each date lookup. The plan
+lives in the repository root regardless of the launch directory or `RESY_DATA_DIR`.
+
+**Never put credentials, payment IDs, account aliases, or fee approvals in this file.**
+The loader binds the sole local account automatically for dry runs, or uses the account
+chosen in the menu when multiple accounts exist. Per-goal account selection and fee
+approval live in ignored `client/reservation-settings.json` (under `RESY_DATA_DIR` if
+set); credentials remain in ignored `accounts.json`. They are joined only in memory.
+Changing a goal requires renewing its fee/terms approval. No old test-task approvals
+are silently carried over to the new goals.
+
+An existing empty/comment-only plan disables all targets. If the file is absent,
+legacy `tasks.json` mode remains available; an invalid plan never falls back to it.
+Stop workers before editing: running workers keep their original snapshot. New runs
+and scheduled dispatches reload the file. Recreate schedules after target changes;
+a schedule whose target identity changed is skipped instead of booking a substitute.
+
 ## Running tasks
 
 1. Add your own account in **Manage Accounts**. Credential entry is hidden and local.
-2. Add a task with restaurant ID, party size, date range, hour window, polling delay,
-   campaign group, and the charge/terms policy you reviewed in the official checkout.
-3. First use **Dry run (no checkout)** to inspect available slots.
-4. Use **Start Tasks (live)** and confirm the explicit live-booking prompt.
+2. Edit and commit `reservations.txt` with the desired target(s).
+3. Use **Show tasks → Configure account and fee limits** to approve each goal locally.
+4. First use **Dry run (no checkout)** to inspect available slots.
+5. Use **Start Tasks (live)** and confirm the explicit live-booking prompt.
 
-Start Tasks launches **all saved tasks**, up to four active worker threads. Review
-and remove obsolete test tasks before enabling live booking.
+Start Tasks launches all active plan goals. It does **not** also launch old saved
+`tasks.json` tasks. Merely editing, committing, or checking the plan starts no bookings.
 
 ```sh
-# Offline date-format check; does not validate login or payment readiness:
+# Offline plan/date/time check; no credentials or network required:
 python client/entry.py --check
 
-# One read-only availability pass, bounded to 120 seconds by default:
-python client/entry.py --dry-run --duration 120
+# One read-only pass; the checked-in 11-day plan waits 60 seconds per date:
+python client/entry.py --dry-run --duration 900
 ```
 
 Dry-run does not call the details or booking endpoints, create submission claims,
 charge a card, or change existing reservations. It does not prove checkout readiness.
 It still queries Resy and may encounter rate limits. A duration shorter than the full
-scan can end before every requested date is checked.
+scan can end before every requested date is checked. The default 120-second run
+covers only part of the checked-in 11-day plan at its 60-second polling interval;
+allow about 15 minutes for a complete dry-run pass.
 
 ### Time and polling
 
 Ranges are inclusive, limited to 31 days. Past dates and expired same-day slots are
-skipped; offset-aware slot times are normalized to the venue timezone. Hours remain the
-original integer-hour convention: an end hour of 19 includes 19:00 through 19:59.
+skipped; offset-aware slot times are normalized to the venue timezone. `HH:MM` bounds
+are exact and inclusive: `20:00` excludes `20:01` and `20:59`. Legacy integer-hour tasks
+retain their original convention: an end hour of 19 includes 19:00 through 19:59.
 The selected slot must explicitly report the requested calendar date and venue.
 
 The delay applies **between each date lookup**, with a minimum of one second—not
@@ -211,6 +246,8 @@ and secret checks. Never add real account credentials or live bookings to CI.
 
 ## Code map
 
+- `reservations.txt`, `client/reservation_plan.py`: public targets with private runtime bindings.
+- `client/time_window.py`: exact-minute filtering and legacy-hour compatibility.
 - `client/resygrabber.py`: existing terminal workflow and configuration prompts.
 - `client/task_executor.py`: bounded automatic worker and local bridge calls.
 - `client/control.py`, `client/scheduling.py`: cancellation, deadlines, persisted scheduling.

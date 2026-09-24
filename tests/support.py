@@ -25,6 +25,9 @@ class OfflineTest(unittest.TestCase):
         self.config_patch = patch('client.config_store.DATA_DIR', self.root)
         self.config_patch.start()
         self.addCleanup(self.config_patch.stop)
+        self.plan_patch = patch('client.reservation_plan.PLAN_PATH', self.root / 'reservations.txt')
+        self.plan_patch.start()
+        self.addCleanup(self.plan_patch.stop)
         self.state = BookingState(self.root / '.state/bookings.sqlite3')
 
 

@@ -14,6 +14,8 @@ from client.booking_state import BookingState
 from client.config_store import data_path, load_data, save_data
 from client.fees import FeePolicyError, amount, validate_policy
 from client.reservations import cancel_verified, list_account, resolve_claim
+from client import reservation_plan
+from client.time_window import display_window, time_window
 from client.scheduling import TaskManager, next_once, task_id
 from client.task_executor import format_proxy, reservation_dates
 from client.verification import VerificationError
@@ -36,9 +38,12 @@ def task_summary(task):
     venue = venue if venue.isdigit() else 'invalid'
     dates = [str(task.get(key, '')) for key in ('start_date', 'end_date')]
     dates = [value if re.fullmatch(r'\d{4}-\d{2}-\d{2}', value) else 'invalid' for value in dates]
-    counts = [task.get(key) for key in ('party_sz', 'start_time', 'end_time')]
-    counts = [value if type(value) is int else 'invalid' for value in counts]
-    return f'Restaurant {venue}: {dates[0]}–{dates[1]}, party {counts[0]}, hours {counts[1]}–{counts[2]}'
+    party = task.get('party_sz') if type(task.get('party_sz')) is int else 'invalid'
+    try:
+        hours = display_window(task)
+    except (ValueError, KeyError):
+        hours = 'invalid'
+    return f'Restaurant {venue}: {dates[0]}–{dates[1]}, party {party}, hours {hours}'
 
 
 def policy(task):
@@ -50,6 +55,33 @@ def policy(task):
 
 
 def show_tasks():
+    if reservation_plan.PLAN_PATH.exists():
+        goals = reservation_plan.load_goals()
+        print('Targets come from reservations.txt. Edit that file to add, remove, or change goals.')
+        for goal in goals:
+            print(task_summary(goal))
+        if (
+            choose('Tasks', ['Configure account and fee limits', 'Back'])
+            != 'Configure account and fee limits'
+        ):
+            return
+        if not goals:
+            return
+        selected = choose('Goal', [(task_summary(goal), i) for i, goal in enumerate(goals)])
+        if selected is None:
+            return
+        accounts = load_data('accounts.json', [])
+        if not accounts:
+            print('Add an account first.')
+            return
+        index = choose('Account', [(f'Account {i + 1}', i) for i in range(len(accounts))])
+        if index is None:
+            return
+        settings = dict(goals[selected])
+        policy(settings)
+        reservation_plan.save_goal_settings(goals[selected], accounts[index], settings)
+        print('Account and fee approval saved locally; reservations.txt contains no credentials.')
+        return
     tasks = load_data('tasks.json', [])
     for index, task in enumerate(tasks, 1):
         print(f'{index}) {task_summary(task)}')
@@ -151,7 +183,7 @@ def manage_info():
 
 
 def start_tasks(dry_run=True, duration=120):
-    tasks = load_data('tasks.json', [])
+    tasks = reservation_plan.load_tasks()
     if not tasks:
         print('No tasks saved.')
         return
@@ -167,7 +199,7 @@ def start_tasks(dry_run=True, duration=120):
 
 
 def schedule_tasks():
-    tasks = load_data('tasks.json', [])
+    tasks = reservation_plan.load_tasks()
     if not tasks:
         print('No tasks saved.')
         return
@@ -325,10 +357,12 @@ def main(argv=None):
     try:
         with client_lock():
             if args.check:
-                tasks = load_data('tasks.json', [])
+                tasks = reservation_plan.load_tasks(bind_accounts=False)
                 for task in tasks:
                     reservation_dates(task['start_date'], task['end_date'])
-                print(f'Validated date ranges for {len(tasks)} task(s); credentials were not tested.')
+                    time_window(task)
+                    print(task_summary(task))
+                print(f'Validated date/time ranges for {len(tasks)} task(s); credentials were not tested.')
             elif args.dry_run:
                 start_tasks(True, args.duration)
                 for entry in list(MANAGER.running.values()):

@@ -17,6 +17,7 @@ PRIVATE_NAMES = {
     'license_key.json',
     'access_key.json',
     'schedules.json',
+    'reservation-settings.json',
     'booking-state.json',
     '.local-server-token',
     '.env',
@@ -77,6 +78,10 @@ def scan(path, content, values=()):
         findings.append('private/runtime file')
     if path.startswith('server/bin/') or path.endswith(('.sqlite3', '.log')):
         findings.append('runtime artifact')
+    if Path(path).name == 'reservations.txt':
+        private_fields = '|'.join(sorted(SECRET_KEYS | {'account_name', 'account_id'})).encode()
+        if re.search(rb'(?im)^\s*(?:' + private_fields + rb')\s*[:=]', content):
+            findings.append('private setting in public reservation plan')
     if any(value in content for value in values):
         findings.append('matches a local credential')
     findings.extend(label for label, pattern in PATTERNS if pattern.search(content))

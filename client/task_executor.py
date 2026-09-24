@@ -12,6 +12,7 @@ from client.control import RunControl
 from client.fees import FeePolicyError, validate_policy, validate_quote
 from client.http_headers import CLIENT_USER_AGENT
 from client.local_auth import local_headers
+from client.time_window import minute_value, time_window
 from client.verification import matching_reservation, row_details, slot_datetime, upcoming
 
 
@@ -79,9 +80,7 @@ def execute_task(
         ):
             raise ValueError('Invalid restaurant ID or party size.')
         label = f'Restaurant {venue_id}'
-        start_hour, end_hour = int(task['start_time']), int(task['end_time'])
-        if not 0 <= start_hour <= end_hour <= 23:
-            raise ValueError('Invalid time window.')
+        start_minute, end_minute = time_window(task)
         pause_seconds = max(float(task['delay']) / 1000, 1.0)
         if not 0 < pause_seconds <= 86400:
             raise ValueError('Invalid polling delay.')
@@ -134,7 +133,7 @@ def execute_task(
                         slot_at = datetime.fromisoformat(f'{day}T{clock}').replace(tzinfo=timezone)
                         if slot_at <= datetime.now(timezone):
                             continue
-                        if not start_hour <= int(clock[:2]) <= end_hour:
+                        if not start_minute <= minute_value(clock) <= end_minute:
                             continue
                         if dry_run:
                             print(f'[{label}] DRY RUN: matching slot {day} {clock}; checkout not entered.')
