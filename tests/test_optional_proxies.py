@@ -1,6 +1,7 @@
 """Offline regression tests; never import the interactive client's scheduler."""
 
 import ast
+from datetime import date, timedelta
 from pathlib import Path
 import random
 import types
@@ -185,7 +186,8 @@ class OptionalProxiesTests(unittest.TestCase):
         requests = types.SimpleNamespace(get=Mock(return_value=response))
         notify = Mock()
         worker = load_functions(
-            "client/task_executor.py", {"execute_task", "format_proxy"},
+            "client/task_executor.py", {"execute_task", "format_proxy", "reservation_dates"},
+            date=date, timedelta=timedelta,
             random=random, requests=requests, send_discord_notification=notify,
         )
         task = {
@@ -198,7 +200,7 @@ class OptionalProxiesTests(unittest.TestCase):
         requests.get.assert_called_once()
         self.assertEqual(requests.get.call_args.kwargs["proxies"], expected)
         notify.assert_called_once_with(
-            "", f"(1) Failed to get availability for restaurant test-venue - offline fixture - {status}",
+            "", f"Failed to get availability for restaurant test-venue - {status}",
             summary=f"Availability check failed (HTTP {status}); no booking was submitted by this task.",
         )
 

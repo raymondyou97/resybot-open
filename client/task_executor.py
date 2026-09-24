@@ -2,6 +2,7 @@ import random
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, timedelta
 import capsolver
 from urllib.parse import quote
 
@@ -13,6 +14,17 @@ def format_proxy(proxy_str):
         'https': f'http://{user}:{password}@{ip}:{port}',
     }
 
+def reservation_dates(start_date, end_date):
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if start.isoformat() != start_date or end.isoformat() != end_date:
+        raise ValueError('Reservation dates must use YYYY-MM-DD.')
+    day_count = (end - start).days + 1
+    if not 1 <= day_count <= 31:
+        raise ValueError('Reservation date range must contain between 1 and 31 days.')
+    return [(start + timedelta(days=offset)).isoformat() for offset in range(day_count)]
+
+
 def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
     auth_token = task['auth_token']
     payment_id = task['payment_id']
@@ -23,6 +35,8 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
     start_time = task['start_time']
     end_time = task['end_time']
     delay = task['delay']
+    days = reservation_dates(start_date, end_date)
+    pause_seconds = max(delay / 1000, 1.0)
     #captcha_service = task['captcha_service']
 
     headers = {
@@ -41,62 +55,48 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
 
     while True:
         try:
-            select_proxy = format_proxy(random.choice(proxies)) if proxies else {}
+            for day in days:
+                select_proxy = format_proxy(random.choice(proxies)) if proxies else {}
+                response = requests.get(
+                    'https://api.resy.com/4/find',
+                    params={'lat': 0, 'long': 0, 'day': day, 'party_size': party_sz, 'venue_id': restaurant_id},
+                    headers=headers,
+                    proxies=select_proxy,
+                    timeout=(5, 15),
+                )
+                if response.status_code != 200:
+                    send_discord_notification(webhook_url, f'Failed to get availability for restaurant {restaurant_id} - {response.status_code}', summary=f'Availability check failed (HTTP {response.status_code}); no booking was submitted by this task.')
+                    return
 
-            url = f"https://api.resy.com/4/venue/calendar?venue_id={restaurant_id}&num_seats={party_sz}&start_date={start_date}&end_date={end_date}"
-            response = requests.get(url, headers=headers, proxies=select_proxy)
+                data = response.json()
+                results = data.get('results') if isinstance(data, dict) else None
+                venues = results.get('venues') if isinstance(results, dict) else None
+                if not isinstance(venues, list):
+                    send_discord_notification(webhook_url, f'Unexpected availability response for restaurant {restaurant_id}', summary='Slot response was unexpected; no booking was submitted by this task.')
+                    return
 
-            if response.status_code != 200:
-                send_discord_notification(webhook_url, f'(1) Failed to get availability for restaurant {restaurant_id} - {response.text} - {response.status_code}', summary=f'Availability check failed (HTTP {response.status_code}); no booking was submitted by this task.')
-                return
-            
-            data = response.json()
-            if 'scheduled' not in data:
-                send_discord_notification(webhook_url, f'Unexpected response format for API1 for restaurant {restaurant_id} - {data}', summary='Availability response was unexpected; no booking was submitted by this task.')
-                return
-            for entry in data['scheduled']:
-                if entry['inventory']['reservation'] == 'available':
+                for venue in venues[:1]:
+                    for slot in venue['slots']:
+                        config_token = slot['config']['token']
+                        parts = config_token.split('/')
+                        time_part = parts[8].split(':')[0]
+                        if int(time_part) >= int(start_time) and int(time_part) <= int(end_time):
+                            book_token = get_details(day, party_sz, config_token, restaurant_id, headers, select_proxy)
+                            reservationVal = book_reservation(book_token, auth_token, payment_id, day, party_sz, restaurant_id, config_token, headers, select_proxy)
 
-                    url2 = f"https://api.resy.com/4/find?lat=0&long=0&day={entry['date']}&party_size={party_sz}&venue_id={restaurant_id}"
-                    response2 = requests.get(url2, headers=headers, proxies=select_proxy)
+                            if 'reservation_id' in reservationVal or ('specs' in reservationVal and 'reservation_id' in reservationVal['specs']):
+                                send_discord_notification(webhook_url, f'Reservation booked for restaurant {restaurant_id} - {reservationVal}', summary='Booking API returned a reservation ID. Verify the reservation in your Resy account before retrying.')
+                            else:
+                                send_discord_notification(webhook_url, f'Failed to book reservation for restaurant {restaurant_id} - {reservationVal}', summary='Booking was not confirmed. Check your Resy account before retrying; submission may have occurred.')
+                            return
 
-                    if response2.status_code != 200:
-                        send_discord_notification(webhook_url, f'(2) Failed to get availability for restaurant {restaurant_id}', summary=f'Slot check failed (HTTP {response2.status_code}); no booking was submitted by this task.')
-                        return
-
-                    data2 = response2.json()
-
-                    if 'results' not in data2 :
-                        send_discord_notification(webhook_url, f'Unexpected response format for API2 for restaurant {restaurant_id} - {data2}', summary='Slot response was unexpected; no booking was submitted by this task.')
-                        return
-
-                    if 'results' in data2 and 'venues' in data2['results'] and data2['results']['venues']:
-                        for slot in data2['results']['venues'][0]['slots']:
-                            config_token = slot['config']['token']
-                            parts = config_token.split('/')
-                            time_part = parts[8].split(':')[0]
-                            if int(time_part) >= int(start_time) and int(time_part) <= int(end_time):
-                                book_token = get_details(entry['date'], party_sz, config_token, restaurant_id, headers, select_proxy)
-                                reservationVal = book_reservation(book_token, auth_token, payment_id, entry['date'], party_sz, restaurant_id, config_token, headers, select_proxy)
-
-                                if 'reservation_id' in reservationVal or ('specs' in reservationVal and 'reservation_id' in reservationVal['specs']):
-                                    send_discord_notification(webhook_url, f'Reservation booked for restaurant {restaurant_id} - {reservationVal}', summary='Booking API returned a reservation ID. Verify the reservation in your Resy account before retrying.')
-                                    return
-                                else:
-                                    send_discord_notification(webhook_url, f'Failed to book reservation for restaurant {restaurant_id} - {reservationVal}', summary='Booking was not confirmed. Check your Resy account before retrying; submission may have occurred.')
-                                    return
-                                
-                    else:
-                        send_discord_notification(webhook_url, f'Unexpected response format for API2 for restaurant {restaurant_id} - {data2}', summary='Slot response contained no usable venue; no booking was submitted by this task.')
-                        return
-                else:
-                    continue
-        except Exception as e:
+                print(f'No matching slot for {day}; waiting {pause_seconds:g} seconds before the next check.')
+                time.sleep(pause_seconds)
+        except Exception:
             import traceback
             print('failed to execute task')
             traceback.print_exc()
             break
-        time.sleep(delay/1000)
 
 
 def get_captcha_token(captcha_key, site_key, url, proxy):

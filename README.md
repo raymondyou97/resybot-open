@@ -109,6 +109,13 @@ This does not enable CAPTCHA solving in the booking worker. Startup prints the t
 count and waits for Enter on failure so the menu does not immediately erase the error.
 Restart the client after updating its code.
 
+Availability checks use the existing single-date slot lookup directly, without the
+calendar lookup. Tasks scan their inclusive date range (at most 31 days) in order.
+The configured delay applies between each date lookup, with a minimum of one second;
+it is not a release-time scheduler. Each worker stops on an HTTP error rather than
+retrying authentication, access-denied, or rate-limit responses. A successful
+availability lookup does not prove that checkout will succeed.
+
 ## Offline Tests
 
 Run `python3 -m unittest discover -s tests -v` from the repository root. These tests
