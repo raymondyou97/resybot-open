@@ -173,6 +173,6 @@ class BookingState:
 
 def reservation_reference(row):
     reference = row.get('resy_token') or row.get('reservation_id') or row.get('id')
-    if reference is None:
+    if not ((isinstance(reference, str) and reference.strip()) or (type(reference) is int and reference > 0)):
         raise ValueError('Reservation response has no stable reference.')
     return hashlib.sha256(json.dumps(reference, sort_keys=True).encode()).hexdigest()

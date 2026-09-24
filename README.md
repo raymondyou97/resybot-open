@@ -154,6 +154,11 @@ claim once before dispatch, preventing a repeated local request from dispatching
 An HTTP 201 or a reservation ID alone is **not success**. The worker checks the exact
 venue, date, clock time, and party size in Upcoming Reservations. A confirmed result
 persists and suppresses later runs of that campaign. Other campaigns are unaffected.
+Every returned reservation must have a valid venue, calendar date, party size, and
+stable reference. Supported account times are `HH:MM` or `HH:MM:00`; other formats
+are not silently truncated. An incomplete or unsupported entry makes the entire
+account check unresolved, even when another entry matches. It cannot authorize
+checkout, hold release, or cancellation cleanup.
 
 Timeouts, crashes, stopped submissions, or missing confirmation retain a non-expiring
 hold. Stop active workers, then use **Verify campaign holds**. A release requires a
