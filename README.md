@@ -76,8 +76,16 @@ and client environments to use another private directory.
 
 Edit the root [`reservations.txt`](reservations.txt) to describe what to book. It is
 an INI-format text file with one named section per goal; it is intended to be committed.
-The checked-in target is Double Chicken Please/The Coop, party of two, September 26
-through October 6, 2026, inclusive, **17:00 through exactly 20:00 America/New_York**.
+The checked-in targets are both for two people, September 26 through October 6,
+2026, inclusive, in **America/New_York**:
+
+| Restaurant | Exact inclusive time window |
+| --- | --- |
+| Double Chicken Please — The Coop | 17:00–20:00 |
+| 4 Charles Prime Rib | 17:00–19:30 |
+
+These are independent goals: book one at each restaurant, with no spacing
+requirement between them. Success at one does not stop the other search.
 
 The explicit date, party, and time fields control the search; the URL's `date` and
 `seats` query parameters are only a reference. `venue_id` is the API booking target:
@@ -118,7 +126,7 @@ Start Tasks launches all active plan goals. It does **not** also launch old save
 # Offline plan/date/time check; no credentials or network required:
 python client/entry.py --check
 
-# One read-only pass; the checked-in 11-day plan waits 60 seconds per date:
+# One read-only pass per goal; each 11-day window waits 60 seconds per date:
 python client/entry.py --dry-run --duration 900
 ```
 

@@ -59,6 +59,24 @@ class AvailabilityTests(OfflineTest):
             'resybot-open/1.0 (personal reservation client)',
         )
 
+    def test_one_goal_success_does_not_stop_another_goal(self):
+        import threading
+
+        finished = threading.Event()
+
+        def execute(config, *args, control=None, **kwargs):
+            if config['restaurant_id'] == '123':
+                finished.set()
+                return 'confirmed'
+            self.assertTrue(finished.wait(1))
+            self.assertFalse(control.stopped())
+            return 'awaiting-verification'
+
+        with patch.object(worker, 'execute_task', side_effect=execute):
+            results = worker.run_tasks_concurrently([task(), task(restaurant_id='834')], control=self.control)
+        self.assertCountEqual(results, ['confirmed', 'awaiting-verification'])
+        self.assertFalse(self.control.stopped())
+
     def test_default_is_non_mutating_dry_run(self):
         with redirect_stdout(io.StringIO()):
             result = worker.execute_task(task(), control=self.control)
@@ -206,6 +224,22 @@ class AvailabilityTests(OfflineTest):
             with self.subTest(clock=clock), redirect_stdout(output):
                 result = worker.execute_task(
                     task(start_time='17:00', end_time='20:00'), control=self.control, dry_run=True
+                )
+            self.assertEqual(result, 'dry-run-complete')
+            self.assertEqual('DRY RUN: matching slot' in output.getvalue(), expected)
+        self.book.assert_not_called()
+
+    def test_1930_cutoff_includes_1930_but_not_1931(self):
+        for clock, expected in [('16:59', False), ('17:00', True), ('19:30', True), ('19:31', False)]:
+            self.get.return_value.json.return_value = availability(
+                slots=[
+                    {'date': {'start': f'2099-01-01 {clock}:00'}, 'config': {'token': 'fixture'}},
+                ]
+            )
+            output = io.StringIO()
+            with self.subTest(clock=clock), redirect_stdout(output):
+                result = worker.execute_task(
+                    task(start_time='17:00', end_time='19:30'), control=self.control, dry_run=True
                 )
             self.assertEqual(result, 'dry-run-complete')
             self.assertEqual('DRY RUN: matching slot' in output.getvalue(), expected)

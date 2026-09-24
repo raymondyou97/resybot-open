@@ -1,6 +1,6 @@
 # Public reservation targets. Never put account tokens or payment information here.
 # Dates and HH:MM times below are inclusive and override the URL's date/seats query.
-# One successful booking completes this goal across the entire date range.
+# Book one reservation per goal, independently; no spacing constraint between restaurants.
 
 [double-chicken-please]
 name = Double Chicken Please — The Coop
@@ -11,5 +11,17 @@ start_date = 2026-09-26
 end_date = 2026-10-06
 start_time = 17:00
 end_time = 20:00
+timezone = America/New_York
+poll_interval_ms = 60000
+
+[4-charles-prime-rib]
+name = 4 Charles Prime Rib
+url = https://resy.com/cities/new-york-ny/venues/4-charles-prime-rib
+venue_id = 834
+party_size = 2
+start_date = 2026-09-26
+end_date = 2026-10-06
+start_time = 17:00
+end_time = 19:30
 timezone = America/New_York
 poll_interval_ms = 60000

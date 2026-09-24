@@ -48,6 +48,34 @@ class ReservationPlanTests(OfflineTest):
         self.assertEqual(goal['campaign_id'], 'coop')
         self.assertNotIn('auth_token', goal)
 
+    def test_canonical_venue_url_without_query_parameters_is_valid(self):
+        self.write_plan(PLAN.replace('?date=2026-09-24&seats=2', ''))
+        goal = plan.load_goals()[0]
+        self.assertEqual(goal['restaurant_id'], '42534')
+        self.assertEqual(goal['start_date'], '2099-09-26')
+
+    def test_two_restaurants_are_independent_goals_without_date_spacing(self):
+        second = (
+            PLAN.replace('[coop]', '[4-charles-prime-rib]')
+            .replace('Double Chicken Please', '4 Charles Prime Rib')
+            .replace('double-chicken-please', '4-charles-prime-rib')
+            .replace('venue_id = 42534', 'venue_id = 834')
+            .replace('end_time = 20:00', 'end_time = 19:30')
+        )
+        self.write_plan(PLAN + '\n' + second)
+        account = self.account()
+        for goal in plan.load_goals():
+            plan.save_goal_settings(goal, account, task(max_total_charge='any', max_cancellation_fee='any'))
+        first, second = plan.load_tasks()
+        self.assertNotEqual(first['campaign_id'], second['campaign_id'])
+        self.assertEqual(time_window(second), (17 * 60, 19 * 60 + 30))
+        claim = self.state.claim(first, '2099-09-26', '18:00')
+        self.state.submitted(claim)
+        self.state.confirmed(claim, 'fixture-stable-reference')
+        self.assertTrue(self.state.blocked(first))
+        self.assertFalse(self.state.blocked(second))
+        self.assertTrue(self.state.claim(second, '2099-09-26', '18:00'))
+
     def test_single_local_account_is_bound_in_memory_without_rewriting_files(self):
         self.write_plan()
         account = self.account()

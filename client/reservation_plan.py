@@ -31,7 +31,7 @@ def validate_url(value):
         or not re.fullmatch(r'/cities/[a-z0-9-]+/venues/[a-z0-9-]+/?', url.path)
     ):
         raise ValueError
-    query = parse_qs(url.query, keep_blank_values=True, strict_parsing=True)
+    query = parse_qs(url.query, keep_blank_values=True, strict_parsing=True) if url.query else {}
     if set(query) - {'date', 'seats'} or any(len(values) != 1 for values in query.values()):
         raise ValueError
     if 'date' in query and date.fromisoformat(query['date'][0]).isoformat() != query['date'][0]:
