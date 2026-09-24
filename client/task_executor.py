@@ -47,12 +47,12 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
             response = requests.get(url, headers=headers, proxies=select_proxy)
 
             if response.status_code != 200:
-                send_discord_notification(webhook_url, f'(1) Failed to get availability for restaurant {restaurant_id} - {response.text} - {response.status_code}')
+                send_discord_notification(webhook_url, f'(1) Failed to get availability for restaurant {restaurant_id} - {response.text} - {response.status_code}', summary=f'Availability check failed (HTTP {response.status_code}); no booking was submitted by this task.')
                 return
             
             data = response.json()
             if 'scheduled' not in data:
-                send_discord_notification(webhook_url, f'Unexpected response format for API1 for restaurant {restaurant_id} - {data}')
+                send_discord_notification(webhook_url, f'Unexpected response format for API1 for restaurant {restaurant_id} - {data}', summary='Availability response was unexpected; no booking was submitted by this task.')
                 return
             for entry in data['scheduled']:
                 if entry['inventory']['reservation'] == 'available':
@@ -61,13 +61,13 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
                     response2 = requests.get(url2, headers=headers, proxies=select_proxy)
 
                     if response2.status_code != 200:
-                        send_discord_notification(webhook_url, f'(2) Failed to get availability for restaurant {restaurant_id}')
+                        send_discord_notification(webhook_url, f'(2) Failed to get availability for restaurant {restaurant_id}', summary=f'Slot check failed (HTTP {response2.status_code}); no booking was submitted by this task.')
                         return
 
                     data2 = response2.json()
 
                     if 'results' not in data2 :
-                        send_discord_notification(webhook_url, f'Unexpected response format for API2 for restaurant {restaurant_id} - {data2}')
+                        send_discord_notification(webhook_url, f'Unexpected response format for API2 for restaurant {restaurant_id} - {data2}', summary='Slot response was unexpected; no booking was submitted by this task.')
                         return
 
                     if 'results' in data2 and 'venues' in data2['results'] and data2['results']['venues']:
@@ -77,18 +77,17 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
                             time_part = parts[8].split(':')[0]
                             if int(time_part) >= int(start_time) and int(time_part) <= int(end_time):
                                 book_token = get_details(entry['date'], party_sz, config_token, restaurant_id, headers, select_proxy)
-                                print('\nBook_token is :', book_token)
                                 reservationVal = book_reservation(book_token, auth_token, payment_id, entry['date'], party_sz, restaurant_id, config_token, headers, select_proxy)
 
                                 if 'reservation_id' in reservationVal or ('specs' in reservationVal and 'reservation_id' in reservationVal['specs']):
-                                    send_discord_notification(webhook_url, f'Reservation booked for restaurant {restaurant_id} - {reservationVal}')
+                                    send_discord_notification(webhook_url, f'Reservation booked for restaurant {restaurant_id} - {reservationVal}', summary='Booking API returned a reservation ID. Verify the reservation in your Resy account before retrying.')
                                     return
                                 else:
-                                    send_discord_notification(webhook_url, f'Failed to book reservation for restaurant {restaurant_id} - {reservationVal}')
+                                    send_discord_notification(webhook_url, f'Failed to book reservation for restaurant {restaurant_id} - {reservationVal}', summary='Booking was not confirmed. Check your Resy account before retrying; submission may have occurred.')
                                     return
                                 
                     else:
-                        send_discord_notification(webhook_url, f'Unexpected response format for API2 for restaurant {restaurant_id} - {data2}')
+                        send_discord_notification(webhook_url, f'Unexpected response format for API2 for restaurant {restaurant_id} - {data2}', summary='Slot response contained no usable venue; no booking was submitted by this task.')
                         return
                 else:
                     continue
@@ -148,7 +147,8 @@ def book_reservation(book_token, auth_token, payment_id, day, party_size, restau
 
     return response.json()
         
-def send_discord_notification(webhook_url, message):
+def send_discord_notification(webhook_url, message, *, summary='Task ended; check reservation status in Resy before retrying.'):
+    print(summary)
     if not webhook_url:
         print('Discord notification skipped (no webhook configured). Check reservation status in Resy.')
         return

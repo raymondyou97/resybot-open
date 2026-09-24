@@ -132,11 +132,23 @@ class OptionalProxiesTests(unittest.TestCase):
         requests.post.assert_not_called()
         self.assertNotIn("private fixture payload", str(worker.print.call_args_list))
 
+    def test_notification_prints_only_safe_summary(self):
+        requests = types.SimpleNamespace(post=Mock())
+        worker = load_functions(
+            "client/task_executor.py", {"send_discord_notification"},
+            requests=requests, print=Mock(),
+        )
+        summary = 'Availability check failed (HTTP 403); no booking was submitted by this task.'
+        worker.send_discord_notification('', 'private fixture payload', summary=summary)
+        worker.print.assert_any_call(summary)
+        self.assertNotIn('private fixture payload', str(worker.print.call_args_list))
+        requests.post.assert_not_called()
+
     def test_notification_preserves_configured_webhook(self):
         requests = types.SimpleNamespace(post=Mock())
         worker = load_functions(
             "client/task_executor.py", {"send_discord_notification"},
-            requests=requests,
+            requests=requests, print=Mock(),
         )
         worker.send_discord_notification("https://example.invalid/offline-webhook", "fixture")
         requests.post.assert_called_once_with(
@@ -163,8 +175,13 @@ class OptionalProxiesTests(unittest.TestCase):
             "https": "http://test-user:test-password@proxy.example:8080",
         })
 
-    def check_worker(self, proxies, expected):
-        response = types.SimpleNamespace(status_code=503, text="offline fixture")
+    def test_worker_reports_auth_access_and_rate_limit_errors(self):
+        for status in [401, 403, 429]:
+            with self.subTest(status=status):
+                self.check_worker([], {}, status=status)
+
+    def check_worker(self, proxies, expected, status=503):
+        response = types.SimpleNamespace(status_code=status, text="offline fixture")
         requests = types.SimpleNamespace(get=Mock(return_value=response))
         notify = Mock()
         worker = load_functions(
@@ -181,7 +198,8 @@ class OptionalProxiesTests(unittest.TestCase):
         requests.get.assert_called_once()
         self.assertEqual(requests.get.call_args.kwargs["proxies"], expected)
         notify.assert_called_once_with(
-            "", "(1) Failed to get availability for restaurant test-venue - offline fixture - 503"
+            "", f"(1) Failed to get availability for restaurant test-venue - offline fixture - {status}",
+            summary=f"Availability check failed (HTTP {status}); no booking was submitted by this task.",
         )
 
 
