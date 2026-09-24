@@ -149,6 +149,9 @@ def book_reservation(book_token, auth_token, payment_id, day, party_size, restau
     return response.json()
         
 def send_discord_notification(webhook_url, message):
+    if not webhook_url:
+        print('Discord notification skipped (no webhook configured). Check reservation status in Resy.')
+        return
     data = {"content": message}
     requests.post(webhook_url, json=data)
 

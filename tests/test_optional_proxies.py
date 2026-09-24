@@ -27,16 +27,13 @@ def load_functions(relative_path, names, **dependencies):
 
 
 class OptionalProxiesTests(unittest.TestCase):
-    def client(self, proxies):
+    def client(self, proxies, info=None, tasks=None):
         data = {
-            "tasks": [{"restaurant_id": "test-venue"}],
+            "tasks": [{"restaurant_id": "test-venue"}] if tasks is None else tasks,
             "proxies": proxies,
-            "info": {
-                "capsolver_key": "",
-                "capmonster_key": "",
-                "discord_webhook": "",
-            },
         }
+        if info is not None:
+            data["info"] = info
         return load_functions(
             "client/resygrabber.py",
             {"start_tasks", "run_task_with_timeout", "get_random_proxy"},
@@ -44,6 +41,7 @@ class OptionalProxiesTests(unittest.TestCase):
             load_data=lambda name, default: data.get(name, default),
             click=types.SimpleNamespace(echo=Mock()),
             input=Mock(),
+            print=Mock(),
             random=random,
             run_tasks_concurrently=Mock(),
             threading=types.SimpleNamespace(current_thread=Mock()),
@@ -58,22 +56,91 @@ class OptionalProxiesTests(unittest.TestCase):
             [{"restaurant_id": "test-venue"}], "", "", [], ""
         )
         client.input.assert_called_once()
-        client.click.echo.assert_called_once_with(
+        client.click.echo.assert_any_call(
             "No proxies configured; using the default network connection."
         )
+        client.click.echo.assert_any_call("Starting 1 reservation task(s)...")
 
     def test_start_tasks_preserves_configured_proxies(self):
         proxies = ["proxy.example:8080:test-user:test-password"]
         client = self.client(proxies)
         client.start_tasks()
         self.assertEqual(client.run_tasks_concurrently.call_args.args[3], proxies)
-        client.click.echo.assert_not_called()
+        self.assertNotIn(
+            (("No proxies configured; using the default network connection.",), {}),
+            client.click.echo.call_args_list,
+        )
 
     def test_scheduled_task_passes_empty_proxy_list(self):
         client = self.client([])
         client.run_task_with_timeout(0, 0, "test-job")
         client.run_tasks_concurrently.assert_called_once_with(
             [{"restaurant_id": "test-venue"}], "", "", [], ""
+        )
+
+    def test_empty_and_partial_info_are_optional(self):
+        for info in [{}, {"capsolver_key": ""}, {"discord_webhook": ""}]:
+            with self.subTest(info=info):
+                for scheduled in [False, True]:
+                    client = self.client([], info=info)
+                    if scheduled:
+                        client.run_task_with_timeout(0, 0, "test-job")
+                    else:
+                        client.start_tasks()
+                    client.run_tasks_concurrently.assert_called_once_with(
+                        [{"restaurant_id": "test-venue"}], "", "", [], ""
+                    )
+
+    def test_configured_info_is_preserved(self):
+        info = {
+            "capsolver_key": "offline-solver-fixture",
+            "capmonster_key": "offline-second-solver-fixture",
+            "discord_webhook": "https://example.invalid/offline-webhook",
+        }
+        for scheduled in [False, True]:
+            client = self.client([], info=info)
+            if scheduled:
+                client.run_task_with_timeout(0, 0, "test-job")
+            else:
+                client.start_tasks()
+            client.run_tasks_concurrently.assert_called_once_with(
+                [{"restaurant_id": "test-venue"}], info["capsolver_key"],
+                info["capmonster_key"], [], info["discord_webhook"]
+            )
+
+    def test_no_tasks_message_waits_before_menu_redraw(self):
+        client = self.client([], tasks=[])
+        client.start_tasks()
+        client.run_tasks_concurrently.assert_not_called()
+        client.input.assert_called_once()
+
+    def test_startup_exception_waits_before_menu_redraw(self):
+        client = self.client([])
+        client.run_tasks_concurrently.side_effect = RuntimeError("offline failure")
+        client.start_tasks()
+        client.print.assert_called_once_with("Error starting tasks: offline failure")
+        client.input.assert_called_once()
+
+    def test_notification_without_webhook_does_not_send_or_print_payload(self):
+        requests = types.SimpleNamespace(post=Mock())
+        worker = load_functions(
+            "client/task_executor.py", {"send_discord_notification"},
+            requests=requests, print=Mock(),
+        )
+        for webhook in [None, ""]:
+            worker.send_discord_notification(webhook, "private fixture payload")
+        requests.post.assert_not_called()
+        self.assertNotIn("private fixture payload", str(worker.print.call_args_list))
+
+    def test_notification_preserves_configured_webhook(self):
+        requests = types.SimpleNamespace(post=Mock())
+        worker = load_functions(
+            "client/task_executor.py", {"send_discord_notification"},
+            requests=requests,
+        )
+        worker.send_discord_notification("https://example.invalid/offline-webhook", "fixture")
+        requests.post.assert_called_once_with(
+            "https://example.invalid/offline-webhook", json={"content": "fixture"}
         )
 
     def test_reservation_management_without_proxies(self):

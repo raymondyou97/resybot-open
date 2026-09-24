@@ -103,6 +103,12 @@ This setting does not change CAPTCHA handling or override platform rate limits.
 
 1. From the main menu, select "7) Start Tasks"
 
+This starts **all saved tasks**. Reservation tasks do not require an `info.json`
+file or solver keys; missing Discord configuration disables Discord notifications.
+This does not enable CAPTCHA solving in the booking worker. Startup prints the task
+count and waits for Enter on failure so the menu does not immediately erase the error.
+Restart the client after updating its code.
+
 ## Offline Tests
 
 Run `python3 -m unittest discover -s tests -v` from the repository root. These tests

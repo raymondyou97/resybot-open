@@ -940,7 +940,7 @@ def run_task_with_timeout(task_index, duration, job_id):
     }
     
     try:
-        run_tasks_concurrently([task], info['capsolver_key'], info['capmonster_key'], proxies, info['discord_webhook'])
+        run_tasks_concurrently([task], info.get('capsolver_key', ''), info.get('capmonster_key', ''), proxies, info.get('discord_webhook', ''))
     except Exception as e:
         print(f"Error starting scheduled task: {e}")
     finally:
@@ -1030,15 +1030,16 @@ def start_tasks():
     
     if not tasks:
         click.echo('No tasks found. Please add tasks before starting.')
+        input('Press Enter to continue...')
         return
     if not proxies:
         click.echo('No proxies configured; using the default network connection.')
-    if not info:
-        click.echo('No user info found. Please set user info before starting.')
-        return
+    if not info.get('discord_webhook'):
+        click.echo('Discord notifications disabled (no webhook configured).')
+    click.echo(f'Starting {len(tasks)} reservation task(s)...')
 
     try:
-        run_tasks_concurrently(tasks, info['capsolver_key'], info['capmonster_key'], proxies, info['discord_webhook'])
+        run_tasks_concurrently(tasks, info.get('capsolver_key', ''), info.get('capmonster_key', ''), proxies, info.get('discord_webhook', ''))
     except Exception as e:
         print(f"Error starting tasks: {e}")
     
