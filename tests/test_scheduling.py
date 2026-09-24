@@ -3,7 +3,7 @@ import threading
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
-from client.control import RunControl
+from client.control import RunControl, parse_duration
 from client.config_store import load_data, save_data
 from client.scheduling import TaskManager, next_once, task_id, trigger_for
 from support import OfflineTest, task
@@ -16,6 +16,46 @@ class SchedulingTests(OfflineTest):
         self.assertFalse(control.stopped())
         clock.return_value = 15
         self.assertTrue(control.stopped())
+
+    def test_forever_has_no_deadline_but_keeps_http_timeouts_and_manual_stop(self):
+        clock = Mock(return_value=10)
+        control = RunControl('forever', clock=clock)
+        clock.return_value = 10**12
+        self.assertFalse(control.stopped())
+        self.assertEqual(control.timeout(), (3, 5))
+        done = threading.Event()
+        thread = threading.Thread(target=lambda: (control.wait(60), done.set()))
+        thread.start()
+        control.stop()
+        self.assertTrue(done.wait(1))
+        thread.join(1)
+        self.assertTrue(control.stopped())
+
+    def test_only_explicit_forever_removes_deadline(self):
+        self.assertEqual(parse_duration('forever'), 'forever')
+        self.assertEqual(parse_duration('120'), 120)
+        for duration in (None, True, float('inf'), float('nan'), 0, -1, 'unlimited'):
+            with self.subTest(duration=duration), self.assertRaises(ValueError):
+                RunControl(duration)
+
+    def test_forever_schedule_duration_survives_private_storage(self):
+        config = task()
+        save_data('tasks.json', [config])
+        spec = {
+            'id': 'fixture',
+            'task_id': task_id(config),
+            'repeat': 'Daily',
+            'time': '00:00',
+            'duration': 'forever',
+            'dry_run': True,
+        }
+        manager = TaskManager(Mock())
+        with patch('client.scheduling.BackgroundScheduler'):
+            manager.add(spec)
+        saved = load_data('schedules.json', [])[0]
+        manager.start = Mock()
+        manager.dispatch(saved)
+        self.assertEqual(manager.start.call_args.kwargs['duration'], 'forever')
 
     def test_stop_interrupts_sleep(self):
         control = RunControl(60)

@@ -12,6 +12,7 @@ import inquirer
 
 from client.booking_state import BookingState
 from client.config_store import data_path, load_data, save_data
+from client.control import parse_duration
 from client.fees import FeePolicyError, amount, fee_limit, validate_policy
 from client.reservations import cancel_verified, list_account, resolve_claim
 from client import reservation_plan
@@ -220,7 +221,7 @@ def schedule_tasks():
         'task_id': task_id(task),
         'repeat': repeat,
         'time': input('Start time HH:MM, America/New_York: ').strip(),
-        'duration': float(input('Maximum run duration in seconds: ')),
+        'duration': parse_duration(input('Maximum run duration in seconds (or forever): ').strip()),
         'dry_run': not confirm('Enable REAL automatic booking for this schedule?'),
     }
     if not spec['dry_run']:
@@ -357,7 +358,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Local Resy reservation client')
     parser.add_argument('--dry-run', action='store_true', help='One availability pass; never enters checkout')
     parser.add_argument('--check', action='store_true', help='Validate saved task formats offline')
-    parser.add_argument('--duration', type=float, default=120)
+    parser.add_argument(
+        '--duration',
+        type=parse_duration,
+        default=120,
+        help='Seconds or forever; dry-run still ends after one pass',
+    )
     args = parser.parse_args(argv)
     try:
         with client_lock():

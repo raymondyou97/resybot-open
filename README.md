@@ -155,6 +155,15 @@ and **stopped** only after the thread actually exits. A submitted request cannot
 recalled; its persistent hold remains until verification. Normal HTTP waits have
 connect/read timeouts, but this is cooperative cancellation, not a hard process kill.
 
+For an explicitly unbounded run, use the literal duration `forever` when configuring
+a schedule (or `RunControl('forever')` programmatically). This removes only the wall-clock
+deadline: polling waits stay interruptible, HTTP timeouts remain bounded, and success,
+uncertain submission, access errors, or an entirely expired date range still stop the
+worker. It never means repeatedly booking after success. Numeric durations retain their
+existing maximum of 24 hours. `--dry-run --duration forever` allows a complete read-only
+pass without a deadline; dry-run still exits after that one pass. Keeping the process
+alive across sleep/reboots is separate from this setting.
+
 ### Charge and terms safeguards
 
 Live tasks require:
