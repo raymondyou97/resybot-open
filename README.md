@@ -116,6 +116,12 @@ it is not a release-time scheduler. Each worker stops on an HTTP error rather th
 retrying authentication, access-denied, or rate-limit responses. A successful
 availability lookup does not prove that checkout will succeed.
 
+Lookup logs include the restaurant name from the response plus its ID, falling back
+to the ID until a name is available. A worker stops when the booking API returns a
+reservation ID; other workers are unaffected. There is no persistent success guard:
+restarting tasks or a later scheduled run can attempt another booking. Verify success
+in your Resy account before retrying.
+
 ## Offline Tests
 
 Run `python3 -m unittest discover -s tests -v` from the repository root. These tests

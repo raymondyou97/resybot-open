@@ -56,6 +56,33 @@ class AvailabilityTests(unittest.TestCase):
         worker.get_details.assert_not_called()
         worker.book_reservation.assert_not_called()
         worker.time.sleep.assert_called_once_with(2.0)
+        worker.print.assert_called_once_with(
+            '[Restaurant 123] No matching slot for 2030-01-01; waiting 2 seconds before the next check.'
+        )
+
+    def test_no_slot_log_uses_restaurant_name_and_id(self):
+        worker = self.worker([response({'results': {'venues': [
+            {'venue': {'name': 'Dear Margo'}, 'slots': []},
+        ]}})])
+        with self.assertRaises(EndCycle):
+            self.run_worker(worker)
+        worker.print.assert_called_once_with(
+            '[Dear Margo (ID 123)] No matching slot for 2030-01-01; waiting 2 seconds before the next check.'
+        )
+
+    def test_name_is_retained_when_next_date_has_no_venue(self):
+        worker = self.worker([
+            response({'results': {'venues': [
+                {'venue': {'name': 'Dear Margo'}, 'slots': []},
+            ]}}),
+            response({'results': {'venues': []}}),
+        ])
+        worker.time.sleep.side_effect = [None, EndCycle()]
+        with self.assertRaises(EndCycle):
+            self.run_worker(worker, end_date='2030-01-02')
+        worker.print.assert_any_call(
+            '[Dear Margo (ID 123)] No matching slot for 2030-01-02; waiting 2 seconds before the next check.'
+        )
 
     def test_checks_each_requested_day_with_delay_between_requests(self):
         empty = response({'results': {'venues': [{'slots': []}]}})
@@ -110,7 +137,9 @@ class AvailabilityTests(unittest.TestCase):
     def test_matching_slot_passes_correct_day_to_mocked_checkout_once(self):
         token = '/'.join(['offline'] * 8 + ['18:30'])
         worker = self.worker([response({'results': {'venues': [
-            {'slots': [{'config': {'token': token}}, {'config': {'token': token}}]},
+            {'venue': {'name': 'Dear Margo'}, 'slots': [
+                {'config': {'token': token}}, {'config': {'token': token}},
+            ]},
         ]}})])
         self.run_worker(worker)
         worker.get_details.assert_called_once()
@@ -119,6 +148,9 @@ class AvailabilityTests(unittest.TestCase):
         self.assertEqual(worker.book_reservation.call_args.args[3], '2030-01-01')
         worker.requests.get.assert_called_once()
         worker.time.sleep.assert_not_called()
+        summary = worker.send_discord_notification.call_args.kwargs['summary']
+        self.assertIn('[Dear Margo (ID 123)]', summary)
+        self.assertIn('stopping this worker', summary)
 
     def test_outside_time_window_does_not_enter_checkout(self):
         token = '/'.join(['offline'] * 8 + ['12:00'])

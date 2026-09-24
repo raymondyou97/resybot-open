@@ -29,6 +29,7 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
     auth_token = task['auth_token']
     payment_id = task['payment_id']
     restaurant_id = task['restaurant_id']
+    restaurant_label = f'Restaurant {restaurant_id}'
     party_sz = task['party_sz']
     start_date = task['start_date']
     end_date = task['end_date']
@@ -65,17 +66,23 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
                     timeout=(5, 15),
                 )
                 if response.status_code != 200:
-                    send_discord_notification(webhook_url, f'Failed to get availability for restaurant {restaurant_id} - {response.status_code}', summary=f'Availability check failed (HTTP {response.status_code}); no booking was submitted by this task.')
+                    send_discord_notification(webhook_url, f'Failed to get availability for restaurant {restaurant_id} - {response.status_code}', summary=f'[{restaurant_label}] Availability check failed (HTTP {response.status_code}); no booking was submitted by this task.')
                     return
 
                 data = response.json()
                 results = data.get('results') if isinstance(data, dict) else None
                 venues = results.get('venues') if isinstance(results, dict) else None
                 if not isinstance(venues, list):
-                    send_discord_notification(webhook_url, f'Unexpected availability response for restaurant {restaurant_id}', summary='Slot response was unexpected; no booking was submitted by this task.')
+                    send_discord_notification(webhook_url, f'Unexpected availability response for restaurant {restaurant_id}', summary=f'[{restaurant_label}] Slot response was unexpected; no booking was submitted by this task.')
                     return
 
                 for venue in venues[:1]:
+                    metadata = venue.get('venue', {})
+                    name = metadata.get('name') if isinstance(metadata, dict) else None
+                    if isinstance(name, str) and name.strip():
+                        safe_name = ''.join(char for char in name if char.isprintable()).strip()
+                        if safe_name:
+                            restaurant_label = f'{safe_name} (ID {restaurant_id})'
                     for slot in venue['slots']:
                         config_token = slot['config']['token']
                         parts = config_token.split('/')
@@ -85,16 +92,16 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
                             reservationVal = book_reservation(book_token, auth_token, payment_id, day, party_sz, restaurant_id, config_token, headers, select_proxy)
 
                             if 'reservation_id' in reservationVal or ('specs' in reservationVal and 'reservation_id' in reservationVal['specs']):
-                                send_discord_notification(webhook_url, f'Reservation booked for restaurant {restaurant_id} - {reservationVal}', summary='Booking API returned a reservation ID. Verify the reservation in your Resy account before retrying.')
+                                send_discord_notification(webhook_url, f'Reservation booked for restaurant {restaurant_id} - {reservationVal}', summary=f'[{restaurant_label}] Booking API returned a reservation ID; stopping this worker. Verify the reservation in your Resy account before retrying.')
                             else:
-                                send_discord_notification(webhook_url, f'Failed to book reservation for restaurant {restaurant_id} - {reservationVal}', summary='Booking was not confirmed. Check your Resy account before retrying; submission may have occurred.')
+                                send_discord_notification(webhook_url, f'Failed to book reservation for restaurant {restaurant_id} - {reservationVal}', summary=f'[{restaurant_label}] Booking was not confirmed. Check your Resy account before retrying; submission may have occurred.')
                             return
 
-                print(f'No matching slot for {day}; waiting {pause_seconds:g} seconds before the next check.')
+                print(f'[{restaurant_label}] No matching slot for {day}; waiting {pause_seconds:g} seconds before the next check.')
                 time.sleep(pause_seconds)
         except Exception:
             import traceback
-            print('failed to execute task')
+            print(f'[{restaurant_label}] Failed to execute task.')
             traceback.print_exc()
             break
 

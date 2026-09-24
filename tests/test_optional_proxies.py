@@ -201,7 +201,7 @@ class OptionalProxiesTests(unittest.TestCase):
         self.assertEqual(requests.get.call_args.kwargs["proxies"], expected)
         notify.assert_called_once_with(
             "", f"Failed to get availability for restaurant test-venue - {status}",
-            summary=f"Availability check failed (HTTP {status}); no booking was submitted by this task.",
+            summary=f"[Restaurant test-venue] Availability check failed (HTTP {status}); no booking was submitted by this task.",
         )
 
 
