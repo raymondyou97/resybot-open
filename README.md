@@ -76,16 +76,15 @@ and client environments to use another private directory.
 
 Edit the root [`reservations.txt`](reservations.txt) to describe what to book. It is
 an INI-format text file with one named section per goal; it is intended to be committed.
-The checked-in targets are both for two people, September 26 through October 6,
+The checked-in target is for two people, September 26 through October 6,
 2026, inclusive, in **America/New_York**:
 
 | Restaurant | Exact inclusive time window |
 | --- | --- |
-| Double Chicken Please — The Coop | 17:00–20:00 |
 | 4 Charles Prime Rib | 17:00–19:30 |
 
-These are independent goals: book one at each restaurant, with no spacing
-requirement between them. Success at one does not stop the other search.
+Book one reservation at this restaurant. Existing reservations at other restaurants
+do not impose a spacing requirement.
 
 The explicit date, party, and time fields control the search; the URL's `date` and
 `seats` query parameters are only a reference. `venue_id` is the API booking target:
@@ -95,7 +94,7 @@ One successful booking completes a goal, not one reservation for every date.
 Use `HH:MM` times, ISO `YYYY-MM-DD` dates, and an IANA timezone. The optional
 `campaign_id` groups alternative venues; otherwise the section name is the campaign.
 `availability_mode = calendar` checks the whole range first; `dates` retains direct
-per-date scanning. Both checked-in goals use calendar mode. `poll_interval_ms` defaults
+per-date scanning. The checked-in goal uses calendar mode. `poll_interval_ms` defaults
 to 60000: it is the pause between complete calendar sweeps in calendar mode, or between
 each date lookup in dates mode. The plan lives in the repository root regardless of
 the launch directory or `RESY_DATA_DIR`.
@@ -156,7 +155,7 @@ The response must cover every requested date within that horizon; incomplete or
 unknown data is not interpreted as no availability.
 
 The configured pause is applied after each sweep, with at least one second between
-slot-date queries. With no available dates, the checked-in goals each use roughly one
+slot-date queries. With no available dates, the checked-in goal uses roughly one
 calendar request per minute—rather than one 11-minute sweep. Available dates add
 slot requests and latency. Calendars can be cached or change before checkout, so this
 improves coverage frequency, not a guarantee of inventory or booking success.
